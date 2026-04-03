@@ -30,6 +30,7 @@ jobs:
         with:
           name: spdifAnalyzer-${{ matrix.os }}
           path: |
-            build/Analyzers/*.dll
-            build/Analyzers/*.so
-            build/Analyzers/*.dylib
+            build/**/*.dll
+            build/**/*.so
+            build/**/*.dylib
+          if-no-files-found: warn
