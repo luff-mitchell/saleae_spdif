@@ -56,11 +56,12 @@ static const char* iec61937_type_name( uint8_t dt )
 /* ======================================================================
    Channel Status byte[3] 하위 4비트 → 샘플링 주파수 문자열
    ====================================================================== */
-static const char* cs_sample_rate( uint8_t cs3 )
+static const char* cs_sample_rate( uint8_t cs3, bool is_nonpcm = false )
 {
     switch ( cs3 & 0x0F )
     {
-        case 0x00: return "44.1kHz";
+        /* Non-audio(IEC61937)에서 byte[3]=0x00은 192kHz 버스트를 의미 */
+        case 0x00: return is_nonpcm ? "192kHz(IEC61937)" : "44.1kHz";
         case 0x02: return "48kHz";
         case 0x03: return "32kHz";
         case 0x08: return "88.2kHz";
@@ -122,7 +123,8 @@ void spdifAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel
         uint8_t cs4 = (uint8_t)((frame.mData1 >> 32) & 0xFF);
 
         const char *audio_type = (cs0 & 0x02) ? "Non-audio" : "PCM";
-        const char *fs         = cs_sample_rate( cs3 );
+        bool        is_nonpcm  = (cs0 & 0x02) != 0;
+        const char *fs         = cs_sample_rate( cs3, is_nonpcm );
         const char *wl         = cs_word_length( cs4 );
 
         snprintf( buf, sizeof(buf), "CS:%s %s %s", audio_type, fs, wl );
@@ -184,13 +186,14 @@ void spdifAnalyzerResults::GenerateExportFile( const char* file, DisplayBase dis
                 const char *audio_type = (cs0 & 0x02) ? "Non-audio" : "PCM";
                 const char *copy       = (cs0 & 0x04) ? "CopyOK"    : "NoCopy";
                 const char *emph       = (cs0 & 0x08) ? "Emphasis"  : "NoEmph";
+                bool        is_nonpcm  = (cs0 & 0x02) != 0;
 
                 char row[512];
                 snprintf( row, sizeof(row),
                     "%s,ChStatus,%s|%s|%s|%s|Cat:0x%02X|Src:%d|Ch:%d|Wlen:%s",
                     time_str,
                     audio_type, copy, emph,
-                    cs_sample_rate(cs3),
+                    cs_sample_rate(cs3, is_nonpcm),
                     cs1,
                     (cs2 >> 0) & 0x0F,
                     (cs2 >> 4) & 0x0F,
@@ -305,15 +308,16 @@ void spdifAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBas
         const char *copy       = (cs0 & 0x04) ? "CopyOK"    : "NoCopy";
         const char *emph       = (cs0 & 0x08) ? "Emphasis"  : "NoEmph";
         const char *prof       = (cs0 & 0x01) ? "Pro"       : "Consumer";
+        bool        is_nonpcm  = (cs0 & 0x02) != 0;
 
         /* Left/Right Channel Status byte[0] 불일치 경고 */
         const char *lr_match = ( cs0 == rcs0 ) ? "" : " [L/R mismatch!]";
 
         char buf[512];
         snprintf( buf, sizeof(buf),
-            "[ChStatus] %s | %s | %s | %s | %s | Cat:0x%02X | Src:%d | Ch:%d | Wlen:%s%s",
+            "[ChStatus] %s | %s | %s | %s | %s | Cat:0x%02X | Src:%d | Ch:%d | Wlen:%s%s\n",
             prof, audio_type, copy, emph,
-            cs_sample_rate( cs3 ),
+            cs_sample_rate( cs3, is_nonpcm ),
             cs1,
             (cs2 >> 0) & 0x0F,
             (cs2 >> 4) & 0x0F,
@@ -330,7 +334,7 @@ void spdifAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBas
         uint16_t payload_bits = (uint16_t)(frame.mData2 & 0xFFFF);
         char buf[256];
         snprintf( buf, sizeof(buf),
-            "[IEC61937] %s | PayloadBits:%u",
+            "[IEC61937] %s | PayloadBits:%u\n",
             iec61937_type_name(dt), payload_bits );
         AddTabularText( buf );
         return;

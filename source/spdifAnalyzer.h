@@ -116,6 +116,7 @@ protected: //vars
     enum Iec61937State  mIecState;      /* 현재 상태                    */
     uint8_t             mIecDataType;   /* Pc 워드에서 읽은 data-type   */
     uint64_t            mIecBurstStart; /* Pa 감지 시각                 */
+    bool                mIsNonAudio;    /* Non-audio 모드 여부          */
 };
 
 extern "C" ANALYZER_EXPORT const char* __cdecl GetAnalyzerName();

@@ -1,4 +1,3 @@
-
 /* 
 
   GPL LICENSE SUMMARY
@@ -55,7 +54,8 @@ spdifAnalyzer::spdifAnalyzer()
     mHasChannelStatus( false ),
     mIecState( IEC61937_IDLE ),
     mIecDataType( 0 ),
-    mIecBurstStart( 0 )
+    mIecBurstStart( 0 ),
+    mIsNonAudio( false )
 {
     struct SpdifBitstreamCallbacks  cb;
 
@@ -99,6 +99,7 @@ void spdifAnalyzer::WorkerThread()
     mIecState      = IEC61937_IDLE;
     mIecDataType   = 0;
     mIecBurstStart = 0;
+    mIsNonAudio    = false;
 
     SpdifBitstreamAnalyzer_Reset(mSba);
 
@@ -163,8 +164,10 @@ void DestroyAnalyzer( Analyzer* analyzer )
 void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
                                      enum SpdifFrameType ft, uint32_t aud_sample )
 {
-    /* gap(불연속) 마커 -- 기존 로직 유지 */
-    if ( (mPrevSampleEnd != t) && (mPrevSampleEnd != 0) ) {
+    /* gap(불연속) 마커
+       Non-audio(IEC61937) 모드에서는 0x0000 패딩 구간의
+       갭을 에러로 표시하지 않음 */
+    if ( (mPrevSampleEnd != t) && (mPrevSampleEnd != 0) && !mIsNonAudio ) {
         Frame eframe;
         eframe.mData1 = t - mPrevSampleEnd;
         eframe.mData2 = 0;
@@ -198,6 +201,9 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
     uint32_t validity = (aud_sample >> 28) & 0x1;
     uint32_t payload  = (aud_sample >>  4) & 0x00FFFFFF;   /* bit[4-27] 24비트 */
 
+    /* Non-audio 모드 갱신 — 갭 억제에 사용 */
+    mIsNonAudio = ( validity != 0 );
+
     if ( validity ) {
         /* Non-audio: 24비트 페이로드 상위 16비트를 mData1에 저장 */
         frame.mData1 = (int64_t)((payload >> 8) & 0xFFFF);
@@ -211,8 +217,10 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
     /* ------------------------------------------------------------------
        IEC 61937 상태머신
        Pa(0xF872) -> Pb(0x4E1F) -> Pc(data-type) -> Pd(length)
+       word16은 validity 분기와 무관하게 raw aud_sample의 bit[12-27]에서
+       직접 추출 — validity=0/1 양쪽 경로 모두 정확히 감지
     ------------------------------------------------------------------ */
-    uint16_t word16 = (uint16_t)(frame.mData1 & 0xFFFF);
+    uint16_t word16 = (uint16_t)((aud_sample >> 12) & 0xFFFF);
 
     switch ( mIecState )
     {
