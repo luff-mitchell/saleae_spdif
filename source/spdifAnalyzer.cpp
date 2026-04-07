@@ -350,8 +350,8 @@ void spdifAnalyzer::status_callback( uint64_t t, uint64_t tend,
         status->channel_status_left[3],
         status->channel_status_left[4] );
 
-    /* ------------------------------------------------------------------ */
-       Channel Status Frame 생성
+    /* ------------------------------------------------------------------
+       Channel Status Frame
        mData1 [63:56] = byte[3] sample rate
        mData1 [55:48] = byte[2] source/channel
        mData1 [47:40] = byte[1] category code
