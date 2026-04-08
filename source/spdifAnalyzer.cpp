@@ -269,24 +269,35 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
             break;
 
         case IEC61937_GOT_PA:
-            /* Pa(sft_B) 다음은 반드시 M 서브프레임 1개
-               그 M을 스킵하고 SKIP_M 상태로 전환
-               M이 아닌 서브프레임이 오면 오인식 → IDLE */
-            if ( ft == sft_M ) {
-                mIecState = IEC61937_GOT_PA_SKIP_M;
+            /* Pa(B) 다음은 바로 W(Right ch) = Pb
+               SPDIF: Frame0: B(Pa) W(Pb) / Frame1: M(Pc) W(Pd) */
+            if ( 0x4E1F == word16 && is_w ) {
+                mIecState = IEC61937_GOT_PB;
+                /* 디버그: Pb 감지 */
+                Frame dbg;
+                dbg.mData1 = 0x4E1F; dbg.mData2 = (uint64_t)ft;
+                dbg.mFlags = 0; dbg.mType = FRAME_TYPE_DBG_PA;
+                dbg.mStartingSampleInclusive = t;
+                dbg.mEndingSampleInclusive   = tend;
+                mResults->AddFrame( dbg ); mResults->CommitResults();
+            } else if ( 0xF872 == word16 && is_m_or_b ) {
+                mIecBurstStart = t; mIecPaFt = ft;
             } else {
+                /* 디버그: Pb 실패 — word16 값 기록 */
+                Frame dbg;
+                dbg.mData1 = word16; dbg.mData2 = (uint64_t)ft;
+                dbg.mFlags = DISPLAY_AS_ERROR_FLAG;
+                dbg.mType  = FRAME_TYPE_DBG_PA;
+                dbg.mStartingSampleInclusive = t;
+                dbg.mEndingSampleInclusive   = tend;
+                mResults->AddFrame( dbg ); mResults->CommitResults();
                 mIecState = IEC61937_IDLE;
             }
             break;
 
         case IEC61937_GOT_PA_SKIP_M:
-            /* M 스킵 후 다음은 반드시 W 서브프레임 = Pb(0x4E1F)
-               W이지만 0x4E1F가 아니면 → IDLE */
-            if ( is_w && 0x4E1F == word16 ) {
-                mIecState = IEC61937_GOT_PB;
-            } else {
-                mIecState = IEC61937_IDLE;
-            }
+            /* 사용 안 함 — 이 상태로 진입하지 않음 */
+            mIecState = IEC61937_IDLE;
             break;
 
         case IEC61937_GOT_PB:

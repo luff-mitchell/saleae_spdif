@@ -342,12 +342,24 @@ void spdifAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBas
         return;
     }
 
-    /* ---- Pa 디버그 프레임 ------------------------------------------- */
+    /* ---- Pa/Pb 디버그 프레임 --------------------------------------- */
     if ( (uint8_t)frame.mType == FRAME_TYPE_DBG_PA )
     {
         char buf[128];
-        snprintf( buf, sizeof(buf),
-            "[Pa@%llu]\n", (unsigned long long)frame.mData1 );
+        if ( frame.mFlags & DISPLAY_AS_ERROR_FLAG ) {
+            /* Pb 실패: word16 값 표시 */
+            snprintf( buf, sizeof(buf),
+                "[Pb_FAIL word16:0x%04X ft:%llu]\n",
+                (unsigned)frame.mData1,
+                (unsigned long long)frame.mData2 );
+        } else if ( frame.mData1 == 0x4E1F ) {
+            /* Pb 성공 */
+            snprintf( buf, sizeof(buf), "[Pb_OK]\n" );
+        } else {
+            /* Pa 감지: @N 표시 */
+            snprintf( buf, sizeof(buf),
+                "[Pa@%llu]\n", (unsigned long long)frame.mData1 );
+        }
         AddTabularText( buf );
         return;
     }
