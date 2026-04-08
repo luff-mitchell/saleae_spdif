@@ -342,6 +342,16 @@ void spdifAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBas
         return;
     }
 
+    /* ---- Pa 디버그 프레임 ------------------------------------------- */
+    if ( (uint8_t)frame.mType == FRAME_TYPE_DBG_PA )
+    {
+        char buf[128];
+        snprintf( buf, sizeof(buf),
+            "[Pa@%llu]\n", (unsigned long long)frame.mData1 );
+        AddTabularText( buf );
+        return;
+    }
+
     /* ---- 일반 오디오 프레임 (기존 로직) ------------------------------- */
     char num1_str[128];
 

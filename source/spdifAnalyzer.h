@@ -38,7 +38,7 @@ extern "C" {
 
 /* ------------------------------------------------------------------ */
 /* 플러그인 버전                                                         */
-#define SPDIF_ANALYZER_VERSION  "v8"
+#define SPDIF_ANALYZER_VERSION  "v9"
 
 /* ------------------------------------------------------------------ */
 /* IEC 61937 버스트 구조 파싱용 상태머신                                 */
@@ -67,6 +67,7 @@ enum Iec61937State {
 /* Frame mType 구분 상수 */
 #define FRAME_TYPE_CHANNEL_STATUS   0xFE   /* Channel Status 블록 프레임 */
 #define FRAME_TYPE_IEC61937         0xFD   /* IEC 61937 포맷 감지 프레임  */
+#define FRAME_TYPE_DBG_PA           0xFC   /* 디버그: Pa 감지 위치 기록   */
 
 class spdifAnalyzerSettings;
 class ANALYZER_EXPORT spdifAnalyzer : public Analyzer2

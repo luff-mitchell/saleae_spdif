@@ -250,10 +250,23 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
     switch ( mIecState )
     {
         case IEC61937_IDLE:
-            if ( 0xF872 == word16 && is_m_or_b && in_burst_window ) {
+            /* 디버그v9: in_burst_window 조건 제거 — 모든 Pa 후보 감지
+               [Pa@N] 으로 B-sync 이후 몇 번째에 Pa가 오는지 확인 */
+            if ( 0xF872 == word16 && is_m_or_b ) {
                 mIecState      = IEC61937_GOT_PA;
                 mIecBurstStart = t;
                 mIecPaFt       = ft;
+
+                /* Pa 디버그 Frame: mData1 = B-sync 이후 서브프레임 번호 */
+                Frame dbgFrame;
+                dbgFrame.mData1 = mSamplesSinceLastBSync;
+                dbgFrame.mData2 = (uint64_t)ft;
+                dbgFrame.mFlags = 0;
+                dbgFrame.mType  = FRAME_TYPE_DBG_PA;
+                dbgFrame.mStartingSampleInclusive = t;
+                dbgFrame.mEndingSampleInclusive   = tend;
+                mResults->AddFrame( dbgFrame );
+                mResults->CommitResults();
             }
             break;
 
