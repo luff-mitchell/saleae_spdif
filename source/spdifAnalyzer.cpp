@@ -269,42 +269,68 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
             break;
 
         case IEC61937_GOT_PA:
-            /* Pa(B) 다음은 바로 W(Right ch) = Pb
-               SPDIF: Frame0: B(Pa) W(Pb) / Frame1: M(Pc) W(Pd) */
-            if ( 0x4E1F == word16 && is_w ) {
-                mIecState = IEC61937_GOT_PB;
-                /* 디버그: Pb 감지 */
-                Frame dbg;
-                dbg.mData1 = 0x4E1F; dbg.mData2 = (uint64_t)ft;
-                dbg.mFlags = 0; dbg.mType = FRAME_TYPE_DBG_PA;
-                dbg.mStartingSampleInclusive = t;
-                dbg.mEndingSampleInclusive   = tend;
-                mResults->AddFrame( dbg ); mResults->CommitResults();
-            } else if ( 0xF872 == word16 && is_m_or_b ) {
-                mIecBurstStart = t; mIecPaFt = ft;
+            /* Pa(B) 다음 순서: B → M → W(Pb)
+               ft=sft_M(2) 이면 M 서브프레임 → 스킵하고 SKIP_M으로
+               ft=sft_W(3) 이면 바로 Pb 체크
+               Pb 허용값: 0x4E1F(표준), 0x4E3E(실측 장치 변형) */
+            if ( ft == sft_M ) {
+                /* M 서브프레임 스킵 → SKIP_M 상태로 */
+                mIecState = IEC61937_GOT_PA_SKIP_M;
+            } else if ( is_w ) {
+                bool pb_ok = ( word16 == 0x4E1F || word16 == 0x4E3E );
+                if ( pb_ok ) {
+                    mIecState = IEC61937_GOT_PB;
+                } else if ( 0xF872 == word16 ) {
+                    mIecBurstStart = t; mIecPaFt = ft;
+                } else {
+                    mIecState = IEC61937_IDLE;
+                }
             } else {
-                /* 디버그: Pb 실패 — word16 값 기록 */
-                Frame dbg;
-                dbg.mData1 = word16; dbg.mData2 = (uint64_t)ft;
-                dbg.mFlags = DISPLAY_AS_ERROR_FLAG;
-                dbg.mType  = FRAME_TYPE_DBG_PA;
-                dbg.mStartingSampleInclusive = t;
-                dbg.mEndingSampleInclusive   = tend;
-                mResults->AddFrame( dbg ); mResults->CommitResults();
                 mIecState = IEC61937_IDLE;
             }
             break;
 
         case IEC61937_GOT_PA_SKIP_M:
-            /* 사용 안 함 — 이 상태로 진입하지 않음 */
-            mIecState = IEC61937_IDLE;
+            /* M 스킵 후 다음은 W(Pb)
+               Pb 허용값: 0x4E1F(표준), 0x4E3E(실측 장치 변형) */
+            if ( is_w ) {
+                bool pb_ok = ( word16 == 0x4E1F || word16 == 0x4E3E );
+                if ( pb_ok ) {
+                    mIecState = IEC61937_GOT_PB;
+                } else {
+                    mIecState = IEC61937_IDLE;
+                }
+            } else {
+                mIecState = IEC61937_IDLE;
+            }
             break;
 
         case IEC61937_GOT_PB:
+            /* Pc: M 또는 B 채널 서브프레임 */
             if ( is_m_or_b ) {
                 mIecDataType = (uint8_t)(word16 & 0x1F);
                 mIecState    = IEC61937_GOT_PC;
+                /* 디버그: Pc 감지 — data_type과 ft 기록 */
+                Frame dbgPc;
+                dbgPc.mData1 = word16;
+                dbgPc.mData2 = (uint64_t)ft;
+                dbgPc.mFlags = 0;
+                dbgPc.mType  = FRAME_TYPE_DBG_PC;
+                dbgPc.mStartingSampleInclusive = t;
+                dbgPc.mEndingSampleInclusive   = tend;
+                mResults->AddFrame( dbgPc );
+                mResults->CommitResults();
             } else {
+                /* 디버그: Pc 실패 — W가 왔음 */
+                Frame dbgPc;
+                dbgPc.mData1 = word16;
+                dbgPc.mData2 = (uint64_t)ft;
+                dbgPc.mFlags = DISPLAY_AS_ERROR_FLAG;
+                dbgPc.mType  = FRAME_TYPE_DBG_PC;
+                dbgPc.mStartingSampleInclusive = t;
+                dbgPc.mEndingSampleInclusive   = tend;
+                mResults->AddFrame( dbgPc );
+                mResults->CommitResults();
                 mIecState = IEC61937_IDLE;
             }
             break;
@@ -312,11 +338,32 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
         case IEC61937_GOT_PC:
         {
             if ( !is_w ) {
+                /* 디버그: Pd 실패 — W가 아닌 서브프레임 */
+                Frame dbgPd;
+                dbgPd.mData1 = word16;
+                dbgPd.mData2 = (uint64_t)ft;
+                dbgPd.mFlags = DISPLAY_AS_ERROR_FLAG;
+                dbgPd.mType  = FRAME_TYPE_DBG_PD;
+                dbgPd.mStartingSampleInclusive = t;
+                dbgPd.mEndingSampleInclusive   = tend;
+                mResults->AddFrame( dbgPd );
+                mResults->CommitResults();
                 mIecState = IEC61937_IDLE;
                 break;
             }
 
             uint16_t payload_bits = word16;
+
+            /* 디버그: Pd 감지 — payload_bits 기록 */
+            Frame dbgPd;
+            dbgPd.mData1 = payload_bits;
+            dbgPd.mData2 = (uint64_t)mIecDataType;
+            dbgPd.mFlags = 0;
+            dbgPd.mType  = FRAME_TYPE_DBG_PD;
+            dbgPd.mStartingSampleInclusive = t;
+            dbgPd.mEndingSampleInclusive   = tend;
+            mResults->AddFrame( dbgPd );
+            mResults->CommitResults();
 
             Frame iecFrame;
             iecFrame.mData1 = (uint64_t)mIecDataType;

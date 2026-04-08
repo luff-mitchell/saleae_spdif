@@ -347,18 +347,54 @@ void spdifAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBas
     {
         char buf[128];
         if ( frame.mFlags & DISPLAY_AS_ERROR_FLAG ) {
-            /* Pb 실패: word16 값 표시 */
             snprintf( buf, sizeof(buf),
                 "[Pb_FAIL word16:0x%04X ft:%llu]\n",
                 (unsigned)frame.mData1,
                 (unsigned long long)frame.mData2 );
-        } else if ( frame.mData1 == 0x4E1F ) {
-            /* Pb 성공 */
-            snprintf( buf, sizeof(buf), "[Pb_OK]\n" );
+        } else if ( frame.mData1 == 0x4E1F || frame.mData1 == 0x4E3E ) {
+            snprintf( buf, sizeof(buf), "[Pb_OK 0x%04X]\n", (unsigned)frame.mData1 );
         } else {
-            /* Pa 감지: @N 표시 */
             snprintf( buf, sizeof(buf),
                 "[Pa@%llu]\n", (unsigned long long)frame.mData1 );
+        }
+        AddTabularText( buf );
+        return;
+    }
+
+    /* ---- Pc 디버그 프레임 ------------------------------------------ */
+    if ( (uint8_t)frame.mType == FRAME_TYPE_DBG_PC )
+    {
+        char buf[128];
+        if ( frame.mFlags & DISPLAY_AS_ERROR_FLAG ) {
+            snprintf( buf, sizeof(buf),
+                "[Pc_FAIL word16:0x%04X ft:%llu]\n",
+                (unsigned)frame.mData1,
+                (unsigned long long)frame.mData2 );
+        } else {
+            snprintf( buf, sizeof(buf),
+                "[Pc_OK word16:0x%04X type:0x%02X ft:%llu]\n",
+                (unsigned)frame.mData1,
+                (unsigned)(frame.mData1 & 0x1F),
+                (unsigned long long)frame.mData2 );
+        }
+        AddTabularText( buf );
+        return;
+    }
+
+    /* ---- Pd 디버그 프레임 ------------------------------------------ */
+    if ( (uint8_t)frame.mType == FRAME_TYPE_DBG_PD )
+    {
+        char buf[128];
+        if ( frame.mFlags & DISPLAY_AS_ERROR_FLAG ) {
+            snprintf( buf, sizeof(buf),
+                "[Pd_FAIL word16:0x%04X ft:%llu]\n",
+                (unsigned)frame.mData1,
+                (unsigned long long)frame.mData2 );
+        } else {
+            snprintf( buf, sizeof(buf),
+                "[Pd_OK PayloadBits:%u type:0x%02X]\n",
+                (unsigned)frame.mData1,
+                (unsigned)frame.mData2 );
         }
         AddTabularText( buf );
         return;
