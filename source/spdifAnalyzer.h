@@ -38,17 +38,18 @@ extern "C" {
 
 /* ------------------------------------------------------------------ */
 /* 플러그인 버전                                                         */
-#define SPDIF_ANALYZER_VERSION  "v11"
+#define SPDIF_ANALYZER_VERSION  "v12"
 
 /* ------------------------------------------------------------------ */
 /* IEC 61937 버스트 구조 파싱용 상태머신                                 */
 /*  Pa(0xF872) -> Pb(0x4E1F) -> Pc(data-type) -> Pd(length)           */
 /* ------------------------------------------------------------------ */
 enum Iec61937State {
-    IEC61937_IDLE,      /* Pa 대기 중          */
-    IEC61937_GOT_PA,    /* Pa 감지, Pb 대기    */
-    IEC61937_GOT_PB,    /* Pb 감지, Pc 대기    */
-    IEC61937_GOT_PC,    /* Pc 감지, Pd 대기    */
+    IEC61937_IDLE,          /* Pa 대기 중                    */
+    IEC61937_GOT_PA,        /* Pa 감지, M 스킵 대기          */
+    IEC61937_GOT_PA_SKIP_M, /* M 1개 스킵 완료, Pb(W) 대기   */
+    IEC61937_GOT_PB,        /* Pb 감지, Pc 대기              */
+    IEC61937_GOT_PC,        /* Pc 감지, Pd 대기              */
 };
 
 /* IEC 61937 Pc 워드 하위 5비트 data-type 코드 */

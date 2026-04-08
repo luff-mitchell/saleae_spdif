@@ -269,23 +269,24 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
             break;
 
         case IEC61937_GOT_PA:
-            /* IEC61937 구조: Pa(B/M) → [M 스킵 가능] → Pb(W)
-               SPDIF 순서: B → M → W → M → W
-               Pa가 B이면 바로 다음은 M, 그 다음 W가 Pb
-               → M 서브프레임은 통과, W에서만 Pb(0x4E1F) 체크 */
-            if ( is_w ) {
-                /* Right ch(W): Pb여야 함 */
-                if ( 0x4E1F == word16 ) {
-                    mIecState = IEC61937_GOT_PB;
-                } else {
-                    mIecState = IEC61937_IDLE;
-                }
-            } else if ( 0xF872 == word16 && is_m_or_b ) {
-                /* 새 Pa 재감지 */
-                mIecBurstStart = t;
-                mIecPaFt       = ft;
+            /* Pa(sft_B) 다음은 반드시 M 서브프레임 1개
+               그 M을 스킵하고 SKIP_M 상태로 전환
+               M이 아닌 서브프레임이 오면 오인식 → IDLE */
+            if ( ft == sft_M ) {
+                mIecState = IEC61937_GOT_PA_SKIP_M;
+            } else {
+                mIecState = IEC61937_IDLE;
             }
-            /* else: M 서브프레임 → 그냥 통과 (상태 유지) */
+            break;
+
+        case IEC61937_GOT_PA_SKIP_M:
+            /* M 스킵 후 다음은 반드시 W 서브프레임 = Pb(0x4E1F)
+               W이지만 0x4E1F가 아니면 → IDLE */
+            if ( is_w && 0x4E1F == word16 ) {
+                mIecState = IEC61937_GOT_PB;
+            } else {
+                mIecState = IEC61937_IDLE;
+            }
             break;
 
         case IEC61937_GOT_PB:
