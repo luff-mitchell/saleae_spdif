@@ -291,6 +291,25 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
 
             uint16_t payload_bits = word16;
 
+            /* Pd 값 범위 검증
+               E-AC-3 정상 Pd: 최소 4096 bits 이상
+               3372 같은 작은 값은 E-AC-3 데이터 내부를 읽은 것 → 거부
+               포맷별 최소값:
+                 AC-3:   1536 샘플 × 1bit = 최소 ~1000 bits
+                 E-AC-3: 6144 샘플 기준  = 최소 4096 bits
+                 DTS:    512  샘플 기준  = 최소 512  bits
+               data_type이 E-AC-3(0x15)인 경우만 범위 체크 강화 */
+            bool payload_valid = true;
+            if ( mIecDataType == 0x15 ) {
+                /* E-AC-3: 4096 bits 미만은 오인식으로 간주 */
+                if ( payload_bits < 4096 ) payload_valid = false;
+            }
+
+            if ( !payload_valid ) {
+                mIecState = IEC61937_IDLE;
+                break;
+            }
+
             Frame iecFrame;
             iecFrame.mData1 = (uint64_t)mIecDataType;
             iecFrame.mData2 = (uint64_t)payload_bits;
