@@ -233,25 +233,20 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
     /* ------------------------------------------------------------------
        IEC 61937 상태머신
        Pa(0xF872) -> Pb(0x4E1F) -> Pc(data-type) -> Pd(length)
-       ft 타입으로 M/W 채널 순서 검증:
-         Pa = sft_M (또는 sft_B)
-         Pb = sft_W
-         Pc = sft_M (또는 sft_B)
-         Pd = sft_W
-       → E-AC-3 데이터 내부에서 우연히 0xF872가 나와도
-         ft 타입이 맞지 않으면 Pa로 인정하지 않음
+       ft 타입 검증: Pa/Pc = M or B,  Pb/Pd = W
+       B-sync 이후 8 서브프레임 이내에서만 Pa 탐색
+       → E-AC-3 데이터 내부 0xF872 오인식 차단
     ------------------------------------------------------------------ */
     uint16_t word16 = (uint16_t)((aud_sample >> 12) & 0xFFFF);
 
-    /* Pa/Pc 는 M 또는 B 채널, Pb/Pd 는 W 채널 */
-    bool is_m_or_b = ( ft == sft_M || ft == sft_B );
-    bool is_w      = ( ft == sft_W );
+    bool is_m_or_b      = ( ft == sft_M || ft == sft_B );
+    bool is_w           = ( ft == sft_W );
+    bool in_burst_window = ( mSamplesSinceLastBSync <= 8 );
 
     switch ( mIecState )
     {
         case IEC61937_IDLE:
-            /* Pa: 반드시 M(또는 B) 채널 서브프레임 */
-            if ( 0xF872 == word16 && is_m_or_b ) {
+            if ( 0xF872 == word16 && is_m_or_b && in_burst_window ) {
                 mIecState      = IEC61937_GOT_PA;
                 mIecBurstStart = t;
                 mIecPaFt       = ft;
@@ -259,11 +254,9 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
             break;
 
         case IEC61937_GOT_PA:
-            /* Pb: 반드시 W 채널 + 값 0x4E1F */
             if ( 0x4E1F == word16 && is_w ) {
                 mIecState = IEC61937_GOT_PB;
             } else if ( 0xF872 == word16 && is_m_or_b ) {
-                /* Pa 재감지 → 시작점 갱신 */
                 mIecBurstStart = t;
                 mIecPaFt       = ft;
             } else {
@@ -272,7 +265,6 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
             break;
 
         case IEC61937_GOT_PB:
-            /* Pc: 반드시 M(또는 B) 채널 서브프레임 */
             if ( is_m_or_b ) {
                 mIecDataType = (uint8_t)(word16 & 0x1F);
                 mIecState    = IEC61937_GOT_PC;
@@ -283,32 +275,12 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
 
         case IEC61937_GOT_PC:
         {
-            /* Pd: 반드시 W 채널 서브프레임 */
             if ( !is_w ) {
                 mIecState = IEC61937_IDLE;
                 break;
             }
 
             uint16_t payload_bits = word16;
-
-            /* Pd 값 범위 검증
-               E-AC-3 정상 Pd: 최소 4096 bits 이상
-               3372 같은 작은 값은 E-AC-3 데이터 내부를 읽은 것 → 거부
-               포맷별 최소값:
-                 AC-3:   1536 샘플 × 1bit = 최소 ~1000 bits
-                 E-AC-3: 6144 샘플 기준  = 최소 4096 bits
-                 DTS:    512  샘플 기준  = 최소 512  bits
-               data_type이 E-AC-3(0x15)인 경우만 범위 체크 강화 */
-            bool payload_valid = true;
-            if ( mIecDataType == 0x15 ) {
-                /* E-AC-3: 4096 bits 미만은 오인식으로 간주 */
-                if ( payload_bits < 4096 ) payload_valid = false;
-            }
-
-            if ( !payload_valid ) {
-                mIecState = IEC61937_IDLE;
-                break;
-            }
 
             Frame iecFrame;
             iecFrame.mData1 = (uint64_t)mIecDataType;
