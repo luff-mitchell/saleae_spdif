@@ -304,14 +304,28 @@ void spdifAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBas
         /* Right channel byte[0] — 비교용 */
         uint8_t rcs0 = (uint8_t)((frame.mData2 >>  0) & 0xFF);
 
+        /* bit32: IEC61937 감지 이력 플래그 (status_callback에서 패킹) */
+        bool iec_detected = ( frame.mData2 >> 32 ) & 0x1;
+
         const char *audio_type = (cs0 & 0x02) ? "Non-audio" : "PCM";
         const char *copy       = (cs0 & 0x04) ? "CopyOK"    : "NoCopy";
         const char *emph       = (cs0 & 0x08) ? "Emphasis"  : "NoEmph";
         const char *prof       = (cs0 & 0x01) ? "Pro"       : "Consumer";
-        bool        is_nonpcm  = (cs0 & 0x02) != 0;
+        /* is_nonpcm:
+           CS byte[0] bit[1]=1 이면 확실히 Non-audio.
+           IEC61937이 감지된 적 있으면 CS가 PCM이라고 와도 Non-audio 처리
+           → 장치가 CS bit[1]을 0으로 잘못 설정하는 경우 보호 */
+        bool is_nonpcm = (cs0 & 0x02) != 0 || iec_detected;
 
-        /* Left/Right Channel Status byte[0] 불일치 경고 */
-        const char *lr_match = ( cs0 == rcs0 ) ? "" : " [L/R mismatch!]";
+        /* audio_type도 iec_detected 기준으로 보정 */
+        if ( iec_detected && !(cs0 & 0x02) ) audio_type = "Non-audio(IEC61937)";
+
+        /* Left/Right Channel Status byte[0] 불일치 경고
+           mData2 bit32는 IEC61937 감지 플래그이므로 비교에서 제외
+           Right CS가 없거나(lower 32bit==0) 아직 수신 안 됨 → 억제 */
+        uint32_t rcs_raw = (uint32_t)(frame.mData2 & 0xFFFFFFFF);
+        bool right_cs_valid = ( rcs_raw != 0 );
+        const char *lr_match = ( !right_cs_valid || cs0 == rcs0 ) ? "" : " [L/R mismatch!]";
 
         char buf[512];
         snprintf( buf, sizeof(buf),

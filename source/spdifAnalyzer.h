@@ -37,6 +37,10 @@ extern "C" {
 };
 
 /* ------------------------------------------------------------------ */
+/* 플러그인 버전                                                         */
+#define SPDIF_ANALYZER_VERSION  "v7"
+
+/* ------------------------------------------------------------------ */
 /* IEC 61937 버스트 구조 파싱용 상태머신                                 */
 /*  Pa(0xF872) -> Pb(0x4E1F) -> Pc(data-type) -> Pd(length)           */
 /* ------------------------------------------------------------------ */
@@ -117,7 +121,12 @@ protected: //vars
     uint8_t                 mIecDataType;   /* Pc 워드에서 읽은 data-type   */
     uint64_t                mIecBurstStart; /* Pa 감지 시각                 */
     enum SpdifFrameType     mIecPaFt;       /* Pa의 프리앰블 타입 (M/W)     */
-    bool                    mIsNonAudio;    /* Non-audio 모드 여부          */
+    bool                    mIsNonAudio;    /* Non-audio 모드 여부 (sticky) */
+    bool                    mIecDetected;   /* IEC61937 버스트 1회 이상 감지 */
+    uint8_t                 mIecLastType;   /* 마지막으로 감지된 data-type  */
+    uint64_t                mIecPaTend;     /* Pa tend — Pb 연속성 검증용   */
+    uint64_t                mIecPbTend;     /* Pb tend — Pc 연속성 검증용   */
+    uint64_t                mIecPcTend;     /* Pc tend — Pd 연속성 검증용   */
 };
 
 extern "C" ANALYZER_EXPORT const char* __cdecl GetAnalyzerName();

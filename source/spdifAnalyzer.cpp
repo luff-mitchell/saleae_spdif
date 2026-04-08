@@ -56,7 +56,12 @@ spdifAnalyzer::spdifAnalyzer()
     mIecDataType( 0 ),
     mIecBurstStart( 0 ),
     mIecPaFt( sft_invalid ),
-    mIsNonAudio( false )
+    mIsNonAudio( false ),
+    mIecDetected( false ),
+    mIecLastType( 0 ),
+    mIecPaTend( 0 ),
+    mIecPbTend( 0 ),
+    mIecPcTend( 0 )
 {
     struct SpdifBitstreamCallbacks  cb;
 
@@ -102,6 +107,11 @@ void spdifAnalyzer::WorkerThread()
     mIecBurstStart = 0;
     mIecPaFt       = sft_invalid;
     mIsNonAudio    = false;
+    mIecDetected   = false;
+    mIecLastType   = 0;
+    mIecPaTend     = 0;
+    mIecPbTend     = 0;
+    mIecPcTend     = 0;
 
     SpdifBitstreamAnalyzer_Reset(mSba);
 
@@ -140,12 +150,12 @@ U32 spdifAnalyzer::GetMinimumSampleRateHz()
 
 const char* spdifAnalyzer::GetAnalyzerName() const
 {
-    return "SPDIF";
+    return "SPDIF " SPDIF_ANALYZER_VERSION;
 }
 
 const char* GetAnalyzerName()
 {
-    return "SPDIF";
+    return "SPDIF " SPDIF_ANALYZER_VERSION;
 }
 
 Analyzer* CreateAnalyzer()
@@ -169,10 +179,16 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
     /* gap(불연속) 마커
        Non-audio(IEC61937) 모드에서는 0x0000 패딩 구간의
        갭을 에러로 표시하지 않음
-       판단 기준 1: validity=1 (서브프레임 단위)
-       판단 기준 2: Channel Status byte[0] bit[1]=1 (블록 단위, 더 정확) */
-    uint32_t validity_check = (aud_sample >> 28) & 0x1;
-    bool is_nonpcm_frame = ( validity_check != 0 ) || mIsNonAudio;
+       억제 조건:
+         1. validity=1 (이 서브프레임이 Non-audio)
+         2. mIsNonAudio=true (Channel Status로 확인된 Non-audio 스트림)
+            → 한번 true가 되면 sticky: 스트림 리셋(B-sync 이상) 전까지 유지
+         3. IEC61937 상태머신이 IDLE이 아님 (Pa 감지 후 ~ Pd 완료 사이)
+            → 버스트 내부 패딩 구간 보호 */
+    uint32_t validity_check  = (aud_sample >> 28) & 0x1;
+    bool is_nonpcm_frame = ( validity_check != 0 )
+                        || mIsNonAudio
+                        || ( mIecState != IEC61937_IDLE );
 
     if ( (mPrevSampleEnd != t) && (mPrevSampleEnd != 0) && !is_nonpcm_frame ) {
         Frame eframe;
@@ -190,9 +206,7 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
 
     mSamplesSinceLastBSync++;
 
-    /* B-sync 마커
-       B-sync가 오면 IEC61937 상태머신도 리셋
-       → 버스트 경계가 바뀌면 Pa~Pd 순서가 깨지기 때문 */
+    /* B-sync 마커 */
     if ( sft_B == ft ) {
         if ( 384 == mSamplesSinceLastBSync ) {
             mResults->AddMarker( t, AnalyzerResults::Dot, mSettings->mInputChannel );
@@ -201,11 +215,9 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
         }
         mSamplesSinceLastBSync = 0;
 
-        /* B-sync 경계에서 상태머신 리셋 */
-        if ( mIecState != IEC61937_IDLE ) {
-            mIecState    = IEC61937_IDLE;
-            mIecDataType = 0;
-        }
+        /* E-AC-3는 버스트(6144 서브프레임) 안에 B-sync가 32번 포함됨
+           → B-sync마다 상태머신을 리셋하면 Pa→Pb→Pc→Pd 추적이 끊김
+           → B-sync 리셋을 제거하고, Pa→Pb 연속성 검증으로 오인식 차단 */
     }
 
     /* ------------------------------------------------------------------
@@ -216,8 +228,10 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
     uint32_t validity = (aud_sample >> 28) & 0x1;   /* validity_check와 동일값 */
     uint32_t payload  = (aud_sample >>  4) & 0x00FFFFFF;   /* bit[4-27] 24비트 */
 
-    /* Non-audio 모드 갱신 — status_callback에서 CS byte[0]로 갱신되므로
-       여기서는 validity=1인 경우만 즉시 반영 */
+    /* Non-audio 모드 갱신
+       validity=1 → 즉시 true (sticky: 한번 Non-audio면 다음 CS 블록 전까지 유지)
+       false 전환은 status_callback()에서 CS byte[0] bit[1]=0 확인 시에만 수행
+       → 이렇게 해야 CS 블록 도착 전 초기 구간에서도 gap 억제가 동작함 */
     if ( validity ) mIsNonAudio = true;
 
     if ( validity ) {
@@ -231,43 +245,64 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
     frame.mData2 = aud_sample;   /* raw 32비트는 항상 보존 */
 
     /* ------------------------------------------------------------------
-       IEC 61937 상태머신
+       IEC 61937 상태머신 (v6 — 연속성 엄격 검증)
        Pa(0xF872) -> Pb(0x4E1F) -> Pc(data-type) -> Pd(length)
-       ft 타입 검증: Pa/Pc = M or B,  Pb/Pd = W
-       B-sync 이후 8 서브프레임 이내에서만 Pa 탐색
-       → E-AC-3 데이터 내부 0xF872 오인식 차단
-    ------------------------------------------------------------------ */
-    uint16_t word16 = (uint16_t)((aud_sample >> 12) & 0xFFFF);
 
-    bool is_m_or_b      = ( ft == sft_M || ft == sft_B );
-    bool is_w           = ( ft == sft_W );
-    bool in_burst_window = ( mSamplesSinceLastBSync <= 8 );
+       핵심 변경:
+       1. Pa→Pb→Pc→Pd 각 단계가 반드시 연속 서브프레임이어야 함
+          (tend[n] + 1 == t[n+1] 검증)
+          → E-AC-3 데이터 내부의 우연한 0xF872/0x4E1F 패턴 차단
+       2. B-sync에서 상태머신 리셋 제거
+          → E-AC-3 버스트(6144 서브프레임) 안에 B-sync가 32번 끼어도 추적 유지
+       3. in_burst_window 조건 제거 (연속성 검증으로 대체)
+       4. Pd 범위 검증: 비표준 값이면 버림
+          → 정상 E-AC-3 PayloadBits: 6144~98304 범위
+    ------------------------------------------------------------------ */
+    uint16_t word16  = (uint16_t)((aud_sample >> 12) & 0xFFFF);
+    bool is_m_or_b   = ( ft == sft_M || ft == sft_B );
+    bool is_w        = ( ft == sft_W );
+
+    /* Pa→Pb 연속성: Pa의 tend 다음 서브프레임이 Pb여야 함
+       SPDIF 서브프레임은 tend+1에서 시작하므로 t == mIecPaTend + 1 */
+    bool pa_pb_consecutive = ( t == mIecPaTend + 1 );
+    bool pb_pc_consecutive = ( t == mIecPbTend + 1 );
+    bool pc_pd_consecutive = ( t == mIecPcTend + 1 );
 
     switch ( mIecState )
     {
         case IEC61937_IDLE:
-            if ( 0xF872 == word16 && is_m_or_b && in_burst_window ) {
+            /* Pa는 항상 탐색 (B-sync 윈도우 제거)
+               단, ft가 M 또는 B인 서브프레임(Left ch)에서만 */
+            if ( 0xF872 == word16 && is_m_or_b ) {
                 mIecState      = IEC61937_GOT_PA;
                 mIecBurstStart = t;
                 mIecPaFt       = ft;
+                mIecPaTend     = tend;
             }
             break;
 
         case IEC61937_GOT_PA:
-            if ( 0x4E1F == word16 && is_w ) {
-                mIecState = IEC61937_GOT_PB;
+            if ( 0x4E1F == word16 && is_w && pa_pb_consecutive ) {
+                /* Pa 바로 다음 서브프레임에서 Pb 확인 → 진짜 프리앰블 */
+                mIecState  = IEC61937_GOT_PB;
+                mIecPbTend = tend;
             } else if ( 0xF872 == word16 && is_m_or_b ) {
+                /* 새 Pa 발견 → 재시작 */
                 mIecBurstStart = t;
                 mIecPaFt       = ft;
+                mIecPaTend     = tend;
             } else {
+                /* Pb가 연속으로 오지 않으면 오인식 → 리셋 */
                 mIecState = IEC61937_IDLE;
             }
             break;
 
         case IEC61937_GOT_PB:
-            if ( is_m_or_b ) {
+            if ( is_m_or_b && pb_pc_consecutive ) {
+                /* Pb 바로 다음 서브프레임에서 Pc 읽기 */
                 mIecDataType = (uint8_t)(word16 & 0x1F);
                 mIecState    = IEC61937_GOT_PC;
+                mIecPcTend   = tend;
             } else {
                 mIecState = IEC61937_IDLE;
             }
@@ -275,12 +310,23 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
 
         case IEC61937_GOT_PC:
         {
-            if ( !is_w ) {
+            if ( !is_w || !pc_pd_consecutive ) {
+                /* Pd가 연속으로 오지 않으면 오인식 → 리셋 */
                 mIecState = IEC61937_IDLE;
                 break;
             }
 
             uint16_t payload_bits = word16;
+
+            /* Pd 범위 검증
+               E-AC-3 정상 PayloadBits: 최소 1000bits, 최대 98304bits(6144×16)
+               AC-3:    최대 18688bits
+               DTS:     최대 32768bits
+               범위 밖이면 오인식으로 판단하고 리셋 */
+            if ( payload_bits < 512 || payload_bits > 98304 ) {
+                mIecState = IEC61937_IDLE;
+                break;
+            }
 
             Frame iecFrame;
             iecFrame.mData1 = (uint64_t)mIecDataType;
@@ -294,6 +340,12 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
 
             mResults->AddMarker( mIecBurstStart, AnalyzerResults::UpArrow,
                                  mSettings->mInputChannel );
+
+            /* IEC61937 감지 이력 기록 (CS 표시 보정용) */
+            mIecDetected = true;
+            mIecLastType = mIecDataType;
+            /* Non-audio sticky 플래그 강제 설정 */
+            mIsNonAudio  = true;
 
             mIecState    = IEC61937_IDLE;
             mIecDataType = 0;
@@ -341,9 +393,14 @@ void spdifAnalyzer::status_callback( uint64_t t, uint64_t tend,
     mHasChannelStatus = true;
 
     /* Channel Status byte[0] bit[1] = Non-audio 플래그
-       validity bit보다 더 정확한 Non-audio 판단 기준
-       → gap 억제에 사용 */
-    mIsNonAudio = ( status->channel_status_left[0] & 0x02 ) != 0;
+       IEC61937이 한번이라도 감지됐으면 CS가 PCM으로 와도 Non-audio 유지
+       → 장치가 CS byte[0]를 잘못 설정하는 경우 보호 */
+    if ( status->channel_status_left[0] & 0x02 ) {
+        mIsNonAudio = true;   /* CS에서 Non-audio 확인 → true */
+    } else if ( !mIecDetected ) {
+        mIsNonAudio = false;  /* IEC61937 미감지 상태에서만 false로 내림 */
+    }
+    /* mIecDetected=true이면 CS가 뭐라고 오든 mIsNonAudio=true 유지 */
 
     /* ------------------------------------------------------------------
        Channel Status Frame
@@ -365,7 +422,8 @@ void spdifAnalyzer::status_callback( uint64_t t, uint64_t tend,
         ( (uint64_t)status->channel_status_right[0]       ) |
         ( (uint64_t)status->channel_status_right[1] <<  8 ) |
         ( (uint64_t)status->channel_status_right[2] << 16 ) |
-        ( (uint64_t)status->channel_status_right[3] << 24 );
+        ( (uint64_t)status->channel_status_right[3] << 24 ) |
+        ( mIecDetected ? ((uint64_t)1 << 32) : 0 );  /* bit32: IEC61937 감지 이력 */
 
     csFrame.mFlags = 0;
     csFrame.mType  = FRAME_TYPE_CHANNEL_STATUS;
