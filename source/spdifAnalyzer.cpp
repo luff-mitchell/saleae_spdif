@@ -233,27 +233,36 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
     /* ------------------------------------------------------------------
        IEC 61937 상태머신
        Pa(0xF872) -> Pb(0x4E1F) -> Pc(data-type) -> Pd(length)
-       word16은 validity 분기와 무관하게 raw aud_sample의 bit[12-27]에서
-       직접 추출 — validity=0/1 양쪽 경로 모두 정확히 감지
+       ft 타입으로 M/W 채널 순서 검증:
+         Pa = sft_M (또는 sft_B)
+         Pb = sft_W
+         Pc = sft_M (또는 sft_B)
+         Pd = sft_W
+       → E-AC-3 데이터 내부에서 우연히 0xF872가 나와도
+         ft 타입이 맞지 않으면 Pa로 인정하지 않음
     ------------------------------------------------------------------ */
     uint16_t word16 = (uint16_t)((aud_sample >> 12) & 0xFFFF);
 
-    /* IEC 61937 상태머신 — M/W 서브프레임 모두 처리하되
-       Pa(M채널), Pb(W채널), Pc(M채널), Pd(W채널) 순서 검증 */
+    /* Pa/Pc 는 M 또는 B 채널, Pb/Pd 는 W 채널 */
+    bool is_m_or_b = ( ft == sft_M || ft == sft_B );
+    bool is_w      = ( ft == sft_W );
+
     switch ( mIecState )
     {
         case IEC61937_IDLE:
-            if ( 0xF872 == word16 ) {
+            /* Pa: 반드시 M(또는 B) 채널 서브프레임 */
+            if ( 0xF872 == word16 && is_m_or_b ) {
                 mIecState      = IEC61937_GOT_PA;
                 mIecBurstStart = t;
-                mIecPaFt       = ft;   /* Pa의 프리앰블 타입 저장 */
+                mIecPaFt       = ft;
             }
             break;
 
         case IEC61937_GOT_PA:
-            if ( 0x4E1F == word16 ) {
+            /* Pb: 반드시 W 채널 + 값 0x4E1F */
+            if ( 0x4E1F == word16 && is_w ) {
                 mIecState = IEC61937_GOT_PB;
-            } else if ( 0xF872 == word16 ) {
+            } else if ( 0xF872 == word16 && is_m_or_b ) {
                 /* Pa 재감지 → 시작점 갱신 */
                 mIecBurstStart = t;
                 mIecPaFt       = ft;
@@ -263,14 +272,23 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
             break;
 
         case IEC61937_GOT_PB:
-            /* Pc 워드: 하위 5비트가 data-type */
-            mIecDataType = (uint8_t)(word16 & 0x1F);
-            mIecState    = IEC61937_GOT_PC;
+            /* Pc: 반드시 M(또는 B) 채널 서브프레임 */
+            if ( is_m_or_b ) {
+                mIecDataType = (uint8_t)(word16 & 0x1F);
+                mIecState    = IEC61937_GOT_PC;
+            } else {
+                mIecState = IEC61937_IDLE;
+            }
             break;
 
         case IEC61937_GOT_PC:
         {
-            /* Pd 워드: payload 길이(비트 단위) */
+            /* Pd: 반드시 W 채널 서브프레임 */
+            if ( !is_w ) {
+                mIecState = IEC61937_IDLE;
+                break;
+            }
+
             uint16_t payload_bits = word16;
 
             Frame iecFrame;
