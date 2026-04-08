@@ -55,6 +55,7 @@ spdifAnalyzer::spdifAnalyzer()
     mIecState( IEC61937_IDLE ),
     mIecDataType( 0 ),
     mIecBurstStart( 0 ),
+    mIecPaFt( sft_invalid ),
     mIsNonAudio( false )
 {
     struct SpdifBitstreamCallbacks  cb;
@@ -99,6 +100,7 @@ void spdifAnalyzer::WorkerThread()
     mIecState      = IEC61937_IDLE;
     mIecDataType   = 0;
     mIecBurstStart = 0;
+    mIecPaFt       = sft_invalid;
     mIsNonAudio    = false;
 
     SpdifBitstreamAnalyzer_Reset(mSba);
@@ -188,7 +190,9 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
 
     mSamplesSinceLastBSync++;
 
-    /* B-sync 마커 -- 기존 로직 유지 */
+    /* B-sync 마커
+       B-sync가 오면 IEC61937 상태머신도 리셋
+       → 버스트 경계가 바뀌면 Pa~Pd 순서가 깨지기 때문 */
     if ( sft_B == ft ) {
         if ( 384 == mSamplesSinceLastBSync ) {
             mResults->AddMarker( t, AnalyzerResults::Dot, mSettings->mInputChannel );
@@ -196,6 +200,12 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
             mResults->AddMarker( t, AnalyzerResults::ErrorDot, mSettings->mInputChannel );
         }
         mSamplesSinceLastBSync = 0;
+
+        /* B-sync 경계에서 상태머신 리셋 */
+        if ( mIecState != IEC61937_IDLE ) {
+            mIecState    = IEC61937_IDLE;
+            mIecDataType = 0;
+        }
     }
 
     /* ------------------------------------------------------------------
@@ -228,45 +238,41 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
     ------------------------------------------------------------------ */
     uint16_t word16 = (uint16_t)((aud_sample >> 12) & 0xFFFF);
 
+    /* IEC 61937 상태머신 — M/W 서브프레임 모두 처리하되
+       Pa(M채널), Pb(W채널), Pc(M채널), Pd(W채널) 순서 검증 */
     switch ( mIecState )
     {
         case IEC61937_IDLE:
             if ( 0xF872 == word16 ) {
                 mIecState      = IEC61937_GOT_PA;
                 mIecBurstStart = t;
-                printf("[IEC] Pa(0xF872) detected\n");
+                mIecPaFt       = ft;   /* Pa의 프리앰블 타입 저장 */
             }
             break;
 
         case IEC61937_GOT_PA:
             if ( 0x4E1F == word16 ) {
                 mIecState = IEC61937_GOT_PB;
-                printf("[IEC] Pb(0x4E1F) detected\n");
-            } else {
-                /* Pb가 아니면 리셋 — 다시 Pa 탐색 */
-                printf("[IEC] Pa after Pa or reset: word16=0x%04X\n", word16);
-                mIecState = ( 0xF872 == word16 ) ? IEC61937_GOT_PA : IEC61937_IDLE;
+            } else if ( 0xF872 == word16 ) {
+                /* Pa 재감지 → 시작점 갱신 */
                 mIecBurstStart = t;
+                mIecPaFt       = ft;
+            } else {
+                mIecState = IEC61937_IDLE;
             }
             break;
 
         case IEC61937_GOT_PB:
-            /* Pc 워드: 하위 5비트가 data-type, bit[8-12]가 error flag */
+            /* Pc 워드: 하위 5비트가 data-type */
             mIecDataType = (uint8_t)(word16 & 0x1F);
             mIecState    = IEC61937_GOT_PC;
-            printf("[IEC] Pc=0x%04X -> data_type=0x%02X\n",
-                   word16, mIecDataType);
             break;
 
         case IEC61937_GOT_PC:
         {
-            /* Pd 워드: payload 길이(비트 단위) — 여기서 포맷 확정 후 Frame 생성 */
+            /* Pd 워드: payload 길이(비트 단위) */
             uint16_t payload_bits = word16;
 
-            /* IEC 61937 포맷 감지 Frame 생성
-               mData1 하위 8비트 : data-type (Pc)
-               mData1 상위 8비트 : 예약
-               mData2            : payload 길이(비트)              */
             Frame iecFrame;
             iecFrame.mData1 = (uint64_t)mIecDataType;
             iecFrame.mData2 = (uint64_t)payload_bits;
@@ -275,9 +281,8 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
             iecFrame.mStartingSampleInclusive = mIecBurstStart;
             iecFrame.mEndingSampleInclusive   = tend;
             mResults->AddFrame( iecFrame );
-            mResults->CommitResults();   /* IEC61937 Frame을 UI에 즉시 반영 */
+            mResults->CommitResults();
 
-            /* 마커: 포맷 감지 위치에 위로 화살표 */
             mResults->AddMarker( mIecBurstStart, AnalyzerResults::UpArrow,
                                  mSettings->mInputChannel );
 
@@ -330,25 +335,6 @@ void spdifAnalyzer::status_callback( uint64_t t, uint64_t tend,
        validity bit보다 더 정확한 Non-audio 판단 기준
        → gap 억제에 사용 */
     mIsNonAudio = ( status->channel_status_left[0] & 0x02 ) != 0;
-
-    /* ------------------------------------------------------------------
-       Channel Status 24바이트 전체 터미널 출력 (디버깅용)
-       Left / Right 채널 각각 hex 덤프
-    ------------------------------------------------------------------ */
-    printf("\n[CS-RAW] Left  : ");
-    for ( int i = 0; i < 24; i++ )
-        printf("%02X ", status->channel_status_left[i]);
-
-    printf("\n[CS-RAW] Right : ");
-    for ( int i = 0; i < 24; i++ )
-        printf("%02X ", status->channel_status_right[i]);
-
-    printf("\n[CS-RAW] byte[0]=0x%02X  byte[1]=0x%02X  byte[2]=0x%02X  byte[3]=0x%02X  byte[4]=0x%02X\n",
-        status->channel_status_left[0],
-        status->channel_status_left[1],
-        status->channel_status_left[2],
-        status->channel_status_left[3],
-        status->channel_status_left[4] );
 
     /* ------------------------------------------------------------------
        Channel Status Frame

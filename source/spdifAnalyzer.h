@@ -113,10 +113,11 @@ protected: //vars
     bool                           mHasChannelStatus;
 
     /* ---- IEC 61937 Non-audio 포맷 감지 상태머신 -------------------- */
-    enum Iec61937State  mIecState;      /* 현재 상태                    */
-    uint8_t             mIecDataType;   /* Pc 워드에서 읽은 data-type   */
-    uint64_t            mIecBurstStart; /* Pa 감지 시각                 */
-    bool                mIsNonAudio;    /* Non-audio 모드 여부          */
+    enum Iec61937State      mIecState;      /* 현재 상태                    */
+    uint8_t                 mIecDataType;   /* Pc 워드에서 읽은 data-type   */
+    uint64_t                mIecBurstStart; /* Pa 감지 시각                 */
+    enum SpdifFrameType     mIecPaFt;       /* Pa의 프리앰블 타입 (M/W)     */
+    bool                    mIsNonAudio;    /* Non-audio 모드 여부          */
 };
 
 extern "C" ANALYZER_EXPORT const char* __cdecl GetAnalyzerName();
