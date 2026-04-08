@@ -239,20 +239,18 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
     ------------------------------------------------------------------ */
     uint16_t word16 = (uint16_t)((aud_sample >> 12) & 0xFFFF);
 
-    bool is_m_or_b      = ( ft == sft_M || ft == sft_B );
-    bool is_w           = ( ft == sft_W );
-    /* E-AC-3 버스트(6144 서브프레임)에는 B-sync가 32번 포함됨
-       Pa는 32번 중 딱 1번의 B-sync 직후에만 위치
-       윈도우를 B-sync 1블록(192 서브프레임) 전체로 확대해서
-       어느 B-sync 뒤에 Pa가 오든 반드시 잡히도록 함 */
-    bool in_burst_window = ( mSamplesSinceLastBSync <= 192 );
+    bool is_m_or_b   = ( ft == sft_M || ft == sft_B );
+    bool is_w        = ( ft == sft_W );
+    /* Pa@0만 진짜 IEC61937 버스트 시작
+       Pa@65, Pa@328 등은 E-AC-3 데이터 내부 오인식
+       → B-sync 서브프레임(mSamplesSinceLastBSync==0)에서만 Pa 인정 */
+    bool in_burst_window = ( mSamplesSinceLastBSync == 0 );
 
     switch ( mIecState )
     {
         case IEC61937_IDLE:
-            /* 디버그v9: in_burst_window 조건 제거 — 모든 Pa 후보 감지
-               [Pa@N] 으로 B-sync 이후 몇 번째에 Pa가 오는지 확인 */
-            if ( 0xF872 == word16 && is_m_or_b ) {
+            /* Pa@0만 진짜: B-sync 서브프레임과 동시에 오는 Pa만 허용 */
+            if ( 0xF872 == word16 && is_m_or_b && in_burst_window ) {
                 mIecState      = IEC61937_GOT_PA;
                 mIecBurstStart = t;
                 mIecPaFt       = ft;
