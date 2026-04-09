@@ -333,6 +333,22 @@ static void sba_ReadSample(
     submask = (sba->sample[3] >> 5) & 0x1;  /* 7 = parity, 5 = subcode, 4 = validity */
     valmask = (sba->sample[3] >> 4) & 0x1;  /* 7 = parity, 5 = subcode, 4 = validity */
 
+    /* validity=1 (Non-audio/IEC61937 페이로드) 서브프레임은
+       bit[30]이 압축 데이터 비트이므로 CS 수집에서 제외
+       → PCM(validity=0) 서브프레임의 bit[30]만 CS로 수집
+       → E-AC-3/AC-3/DTS 전송 중 쓰레기 CS값 방지 */
+    if ( valmask ) {
+        /* validity=1: CS 비트 카운터만 전진, 실제 비트는 0으로 유지 */
+        if ( sft_W == sample_type ) {
+            if ( ++sba->channel_status_right_bits >= CHANNEL_STATUS_NBITS )
+                sba->channel_status_right_bits = 0;
+        } else {
+            if ( ++sba->channel_status_left_bits >= CHANNEL_STATUS_NBITS )
+                sba->channel_status_left_bits = 0;
+        }
+        return;
+    }
+
     if ( sft_W == sample_type ) /* right channel */
     {
         sba->cur_cs.channel_status_right[ sba->channel_status_right_bits>>3 ] |=

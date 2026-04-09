@@ -264,27 +264,11 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
                 mIecState      = IEC61937_GOT_PA;
                 mIecBurstStart = t;
                 mIecPaFt       = ft;
-
-                /* Pa 디버그 Frame: mData1=B-sync 카운터, mData2=ft */
-                Frame dbgFrame;
-                dbgFrame.mData1 = mBSyncCount;
-                dbgFrame.mData2 = (uint64_t)ft;
-                dbgFrame.mFlags = 0;
-                dbgFrame.mType  = FRAME_TYPE_DBG_PA;
-                dbgFrame.mStartingSampleInclusive = t;
-                dbgFrame.mEndingSampleInclusive   = tend;
-                mResults->AddFrame( dbgFrame );
-                mResults->CommitResults();
             }
             break;
 
         case IEC61937_GOT_PA:
-            /* Pa(B) 다음 순서: B → M → W(Pb)
-               ft=sft_M(2) 이면 M 서브프레임 → 스킵하고 SKIP_M으로
-               ft=sft_W(3) 이면 바로 Pb 체크
-               Pb 허용값: 0x4E1F(표준), 0x4E3E(실측 장치 변형) */
             if ( ft == sft_M ) {
-                /* M 서브프레임 스킵 → SKIP_M 상태로 */
                 mIecState = IEC61937_GOT_PA_SKIP_M;
             } else if ( is_w ) {
                 bool pb_ok = ( word16 == 0x4E1F || word16 == 0x4E3E );
@@ -301,8 +285,6 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
             break;
 
         case IEC61937_GOT_PA_SKIP_M:
-            /* M 스킵 후 다음은 W(Pb)
-               Pb 허용값: 0x4E1F(표준), 0x4E3E(실측 장치 변형) */
             if ( is_w ) {
                 bool pb_ok = ( word16 == 0x4E1F || word16 == 0x4E3E );
                 if ( pb_ok ) {
@@ -316,31 +298,10 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
             break;
 
         case IEC61937_GOT_PB:
-            /* Pc: M 또는 B 채널 서브프레임 */
             if ( is_m_or_b ) {
                 mIecDataType = (uint8_t)(word16 & 0x1F);
                 mIecState    = IEC61937_GOT_PC;
-                /* 디버그: Pc 감지 — data_type과 ft 기록 */
-                Frame dbgPc;
-                dbgPc.mData1 = word16;
-                dbgPc.mData2 = (uint64_t)ft;
-                dbgPc.mFlags = 0;
-                dbgPc.mType  = FRAME_TYPE_DBG_PC;
-                dbgPc.mStartingSampleInclusive = t;
-                dbgPc.mEndingSampleInclusive   = tend;
-                mResults->AddFrame( dbgPc );
-                mResults->CommitResults();
             } else {
-                /* 디버그: Pc 실패 — W가 왔음 */
-                Frame dbgPc;
-                dbgPc.mData1 = word16;
-                dbgPc.mData2 = (uint64_t)ft;
-                dbgPc.mFlags = DISPLAY_AS_ERROR_FLAG;
-                dbgPc.mType  = FRAME_TYPE_DBG_PC;
-                dbgPc.mStartingSampleInclusive = t;
-                dbgPc.mEndingSampleInclusive   = tend;
-                mResults->AddFrame( dbgPc );
-                mResults->CommitResults();
                 mIecState = IEC61937_IDLE;
             }
             break;
@@ -348,32 +309,11 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
         case IEC61937_GOT_PC:
         {
             if ( !is_w ) {
-                /* 디버그: Pd 실패 — W가 아닌 서브프레임 */
-                Frame dbgPd;
-                dbgPd.mData1 = word16;
-                dbgPd.mData2 = (uint64_t)ft;
-                dbgPd.mFlags = DISPLAY_AS_ERROR_FLAG;
-                dbgPd.mType  = FRAME_TYPE_DBG_PD;
-                dbgPd.mStartingSampleInclusive = t;
-                dbgPd.mEndingSampleInclusive   = tend;
-                mResults->AddFrame( dbgPd );
-                mResults->CommitResults();
                 mIecState = IEC61937_IDLE;
                 break;
             }
 
             uint16_t payload_bits = word16;
-
-            /* 디버그: Pd 감지 — payload_bits 기록 */
-            Frame dbgPd;
-            dbgPd.mData1 = payload_bits;
-            dbgPd.mData2 = (uint64_t)mIecDataType;
-            dbgPd.mFlags = 0;
-            dbgPd.mType  = FRAME_TYPE_DBG_PD;
-            dbgPd.mStartingSampleInclusive = t;
-            dbgPd.mEndingSampleInclusive   = tend;
-            mResults->AddFrame( dbgPd );
-            mResults->CommitResults();
 
             Frame iecFrame;
             iecFrame.mData1 = (uint64_t)mIecDataType;
@@ -388,7 +328,6 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
             mResults->AddMarker( mIecBurstStart, AnalyzerResults::UpArrow,
                                  mSettings->mInputChannel );
 
-            /* 감지 성공 → B-sync 카운터 리셋 (다음 버스트는 32번째에서) */
             mIecEverDetected = true;
             mBSyncCount      = 0;
             mIsNonAudio      = true;
@@ -436,42 +375,38 @@ void spdifAnalyzer::status_callback( uint64_t t, uint64_t tend,
         mResults->CommitResults();
     }
 
-    /* Channel Status byte[0] bit[1] = Non-audio 플래그 갱신
-       IEC61937 감지 이후엔 PCM으로 와도 Non-audio 유지 */
+    /* spdif.c에서 validity=1 서브프레임의 CS 비트를 수집하지 않으므로
+       PCM 구간의 CS만 수집됨 → 쓰레기값 자동 제거
+       mIsNonAudio 갱신: IEC61937 감지 후엔 PCM으로 와도 유지 */
     if ( status->channel_status_left[0] & 0x02 ) {
         mIsNonAudio = true;
     } else if ( !mIecEverDetected ) {
         mIsNonAudio = false;
     }
 
+    memcpy( &mLastChannelStatus, status, sizeof(mLastChannelStatus) );
+    mHasChannelStatus = true;
+
     mPrevStatus    = t;
     mPrevStatusEnd = tend;
 
-    /* CS Frame 표시 조건:
-       E-AC-3 페이로드 내부 서브프레임의 C비트는 의미없는 값이 수집됨
-       → IEC61937 감지 성공 이후 + 안정화 대기(2회 스킵) 후에만 표시
-       감지 전: 쓰레기값 CS 표시 안 함
-       감지 후 첫 2회: CS 비트스트림이 아직 E-AC-3 데이터 구간일 수 있음 */
-    if ( !mIecEverDetected ) {
-        memcpy( &mLastChannelStatus, status, sizeof(mLastChannelStatus) );
-        mHasChannelStatus = true;
-        return;   /* IEC61937 미감지 → CS Frame 생성 안 함 */
-    }
+    /* CS 192비트가 의미 있는 값인지 확인:
+       validity=0 서브프레임만 수집했으므로
+       E-AC-3 전송 중에는 CS가 거의 0x00으로 남음
+       → channel_status_left[0]~[3]이 모두 0x00이면 표시 안 함
+       (PCM도 0x00이 정상값이지만, PCM에서는 byte[3]에 샘플레이트가 있음) */
+    bool cs_all_zero =
+        ( status->channel_status_left[0] == 0 ) &&
+        ( status->channel_status_left[1] == 0 ) &&
+        ( status->channel_status_left[2] == 0 ) &&
+        ( status->channel_status_left[3] == 0 ) &&
+        ( status->channel_status_left[4] == 0 );
 
-    /* IEC61937 감지 후 몇 번째 CS callback인지 확인
-       mBSyncCount가 0으로 리셋된 이후 첫 32 B-sync 내 2회는 스킵 */
-    static uint32_t iec_detected_cb_count = 0;
-    if ( mBSyncCount < 64 ) {
-        /* 감지 성공 후 64 B-sync(2 버스트) 이내 → 안정화 대기 */
-        iec_detected_cb_count = 0;
-        memcpy( &mLastChannelStatus, status, sizeof(mLastChannelStatus) );
-        mHasChannelStatus = true;
+    if ( cs_all_zero && mIecEverDetected ) {
+        /* E-AC-3 전송 중 수집 안 된 CS → 표시 안 함 */
+        mResults->CommitResults();
         return;
     }
-
-    /* 안정화 완료 → CS Frame 생성 */
-    memcpy( &mLastChannelStatus, status, sizeof(mLastChannelStatus) );
-    mHasChannelStatus = true;
 
     Frame csFrame;
     csFrame.mData1 =
