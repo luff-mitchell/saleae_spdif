@@ -59,7 +59,9 @@ spdifAnalyzer::spdifAnalyzer()
     mIsNonAudio( false ),
     mBSyncCount( 0 ),
     mIecEverDetected( false ),
-    mStatusCallbackCount( 0 )
+    mStatusCallbackCount( 0 ),
+    mLastCsData1( 0xFFFFFFFFFFFFFFFFULL ),
+    mLastCsData2( 0xFFFFFFFFFFFFFFFFULL )
 {
     struct SpdifBitstreamCallbacks  cb;
 
@@ -105,9 +107,11 @@ void spdifAnalyzer::WorkerThread()
     mIecBurstStart    = 0;
     mIecPaFt          = sft_invalid;
     mIsNonAudio       = false;
-    mBSyncCount       = 0;
-    mIecEverDetected  = false;
+    mBSyncCount          = 0;
+    mIecEverDetected     = false;
     mStatusCallbackCount = 0;
+    mLastCsData1         = 0xFFFFFFFFFFFFFFFFULL;
+    mLastCsData2         = 0xFFFFFFFFFFFFFFFFULL;
 
     SpdifBitstreamAnalyzer_Reset(mSba);
 
@@ -422,6 +426,15 @@ void spdifAnalyzer::status_callback( uint64_t t, uint64_t tend,
         ( (uint64_t)status->channel_status_right[2] << 16 ) |
         ( (uint64_t)status->channel_status_right[3] << 24 ) |
         ( mIsNonAudio ? ((uint64_t)1 << 32) : 0 );
+
+    /* 직전 CS와 동일하면 표시 안 함 — 변화가 있을 때만 1회 표시 */
+    if ( csFrame.mData1 == mLastCsData1 && csFrame.mData2 == mLastCsData2 ) {
+        mResults->CommitResults();
+        return;
+    }
+
+    mLastCsData1 = csFrame.mData1;
+    mLastCsData2 = csFrame.mData2;
 
     csFrame.mFlags = 0;
     csFrame.mType  = FRAME_TYPE_CHANNEL_STATUS;
