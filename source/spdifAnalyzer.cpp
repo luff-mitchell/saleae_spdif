@@ -437,9 +437,15 @@ void spdifAnalyzer::status_callback( uint64_t t, uint64_t tend,
     mHasChannelStatus = true;
 
     /* Channel Status byte[0] bit[1] = Non-audio 플래그
-       validity bit보다 더 정확한 Non-audio 판단 기준
-       → gap 억제에 사용 */
-    mIsNonAudio = ( status->channel_status_left[0] & 0x02 ) != 0;
+       IEC61937이 한 번이라도 감지됐으면 CS가 PCM으로 와도 Non-audio 유지
+       → 장치가 CS byte[0]를 잘못 설정하는 경우 보호
+       → T:err samp 억제도 함께 유지됨 */
+    if ( status->channel_status_left[0] & 0x02 ) {
+        mIsNonAudio = true;
+    } else if ( !mIecEverDetected ) {
+        mIsNonAudio = false;   /* IEC61937 미감지 상태에서만 false 허용 */
+    }
+    /* mIecEverDetected=true면 CS가 PCM으로 와도 mIsNonAudio=true 유지 */
 
     /* ------------------------------------------------------------------
        Channel Status Frame
@@ -461,7 +467,8 @@ void spdifAnalyzer::status_callback( uint64_t t, uint64_t tend,
         ( (uint64_t)status->channel_status_right[0]       ) |
         ( (uint64_t)status->channel_status_right[1] <<  8 ) |
         ( (uint64_t)status->channel_status_right[2] << 16 ) |
-        ( (uint64_t)status->channel_status_right[3] << 24 );
+        ( (uint64_t)status->channel_status_right[3] << 24 ) |
+        ( mIecEverDetected ? ((uint64_t)1 << 32) : 0 );  /* bit32: IEC61937 감지 이력 */
 
     csFrame.mFlags = 0;
     csFrame.mType  = FRAME_TYPE_CHANNEL_STATUS;
