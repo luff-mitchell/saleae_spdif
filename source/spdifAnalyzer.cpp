@@ -61,7 +61,8 @@ spdifAnalyzer::spdifAnalyzer()
     mIecEverDetected( false ),
     mStatusCallbackCount( 0 ),
     mLastCsData1( 0xFFFFFFFFFFFFFFFFULL ),
-    mLastCsData2( 0xFFFFFFFFFFFFFFFFULL )
+    mLastCsData2( 0xFFFFFFFFFFFFFFFFULL ),
+    mWasNonAudio( false )
 {
     struct SpdifBitstreamCallbacks  cb;
 
@@ -112,6 +113,7 @@ void spdifAnalyzer::WorkerThread()
     mStatusCallbackCount = 0;
     mLastCsData1         = 0xFFFFFFFFFFFFFFFFULL;
     mLastCsData2         = 0xFFFFFFFFFFFFFFFFULL;
+    mWasNonAudio         = false;
 
     SpdifBitstreamAnalyzer_Reset(mSba);
 
@@ -382,10 +384,22 @@ void spdifAnalyzer::status_callback( uint64_t t, uint64_t tend,
     /* spdif.c에서 validity=1 서브프레임의 CS 비트를 수집하지 않으므로
        PCM 구간의 CS만 수집됨 → 쓰레기값 자동 제거
        mIsNonAudio 갱신: IEC61937 감지 후엔 PCM으로 와도 유지 */
-    if ( status->channel_status_left[0] & 0x02 ) {
-        mIsNonAudio = true;
+    bool cs_is_nonaudio = ( status->channel_status_left[0] & 0x02 ) != 0;
+    bool pcm_transition = mWasNonAudio && !cs_is_nonaudio;  /* Non-audio → PCM 전환 */
+
+    if ( cs_is_nonaudio ) {
+        mIsNonAudio  = true;
+        mWasNonAudio = true;
     } else if ( !mIecEverDetected ) {
-        mIsNonAudio = false;
+        mIsNonAudio  = false;
+        mWasNonAudio = false;
+    } else if ( pcm_transition ) {
+        /* E-AC-3 → PCM 전환: mIsNonAudio 리셋, mIecEverDetected 리셋 */
+        mIsNonAudio      = false;
+        mWasNonAudio     = false;
+        mIecEverDetected = false;
+        mLastCsData1     = 0xFFFFFFFFFFFFFFFFULL;  /* 강제 표시 */
+        mLastCsData2     = 0xFFFFFFFFFFFFFFFFULL;
     }
 
     memcpy( &mLastChannelStatus, status, sizeof(mLastChannelStatus) );
@@ -436,7 +450,8 @@ void spdifAnalyzer::status_callback( uint64_t t, uint64_t tend,
     mLastCsData1 = csFrame.mData1;
     mLastCsData2 = csFrame.mData2;
 
-    csFrame.mFlags = 0;
+    /* PCM 전환 플래그: bit0=1이면 Non-audio→PCM 전환 시점 */
+    csFrame.mFlags = pcm_transition ? 0x01 : 0x00;
     csFrame.mType  = FRAME_TYPE_CHANNEL_STATUS;
     csFrame.mStartingSampleInclusive = t;
     csFrame.mEndingSampleInclusive   = tend;

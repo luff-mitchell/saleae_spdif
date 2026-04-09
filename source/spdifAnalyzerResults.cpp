@@ -296,34 +296,34 @@ void spdifAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBas
     /* ---- Channel Status 블록 ---------------------------------------- */
     if ( (uint8_t)frame.mType == FRAME_TYPE_CHANNEL_STATUS )
     {
-        uint8_t cs0 = (uint8_t)((frame.mData1 >>  0) & 0xFF);  /* Control     */
-        uint8_t cs1 = (uint8_t)((frame.mData1 >>  8) & 0xFF);  /* Category    */
-        uint8_t cs2 = (uint8_t)((frame.mData1 >> 16) & 0xFF);  /* Src/Ch      */
-        uint8_t cs3 = (uint8_t)((frame.mData1 >> 24) & 0xFF);  /* Sample rate */
-        uint8_t cs4 = (uint8_t)((frame.mData1 >> 32) & 0xFF);  /* Word length */
+        uint8_t cs0 = (uint8_t)((frame.mData1 >>  0) & 0xFF);
+        uint8_t cs1 = (uint8_t)((frame.mData1 >>  8) & 0xFF);
+        uint8_t cs2 = (uint8_t)((frame.mData1 >> 16) & 0xFF);
+        uint8_t cs3 = (uint8_t)((frame.mData1 >> 24) & 0xFF);
+        uint8_t cs4 = (uint8_t)((frame.mData1 >> 32) & 0xFF);
 
-        /* Right channel byte[0] — 비교용 */
         uint8_t rcs0 = (uint8_t)((frame.mData2 >>  0) & 0xFF);
-
-        /* bit32: Non-audio 확정 플래그 (mIsNonAudio 값) */
         bool force_nonpcm = ( (frame.mData2 >> 32) & 0x1 ) != 0;
+        bool pcm_transition = ( frame.mFlags & 0x01 ) != 0;
 
-        /* is_nonpcm: CS bit[1]=1 이면 확실히 Non-audio.
-           force_nonpcm=true이면 CS가 잘못 설정된 경우도 Non-audio 처리 */
         bool is_nonpcm = ( cs0 & 0x02 ) != 0 || force_nonpcm;
-
         const char *audio_type = is_nonpcm ? "Non-audio" : "PCM";
         const char *copy       = (cs0 & 0x04) ? "CopyOK"    : "NoCopy";
         const char *emph       = (cs0 & 0x08) ? "Emphasis"  : "NoEmph";
-        /* Pro bit: force_nonpcm이면 Consumer로 보정 (E-AC-3은 Consumer 포맷) */
         const char *prof       = ( (cs0 & 0x01) && !force_nonpcm ) ? "Pro" : "Consumer";
 
-        /* L/R mismatch: bit32 제외하고 비교, Right CS 없으면 억제 */
         uint32_t rcs_raw = (uint32_t)(frame.mData2 & 0xFFFFFFFF);
         bool right_cs_valid = ( rcs_raw != 0 );
         const char *lr_match = ( !right_cs_valid || cs0 == rcs0 ) ? "" : " [L/R mismatch!]";
 
         char buf[512];
+
+        /* Non-audio → PCM 전환 시 [IEC60958] PCM 먼저 표시 */
+        if ( pcm_transition ) {
+            snprintf( buf, sizeof(buf), "[IEC60958] PCM\n" );
+            AddTabularText( buf );
+        }
+
         snprintf( buf, sizeof(buf),
             "[ChStatus] %s | %s | %s | %s | %s | Cat:0x%02X | Src:%d | Ch:%d | Wlen:%s%s\n",
             prof, audio_type, copy, emph,
