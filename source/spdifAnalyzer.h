@@ -38,7 +38,7 @@ extern "C" {
 
 /* ------------------------------------------------------------------ */
 /* 플러그인 버전                                                         */
-#define SPDIF_ANALYZER_VERSION  "v15"
+#define SPDIF_ANALYZER_VERSION  "v16"
 
 /* ------------------------------------------------------------------ */
 /* IEC 61937 버스트 구조 파싱용 상태머신                                 */
@@ -127,6 +127,14 @@ protected: //vars
     uint64_t                mIecBurstStart; /* Pa 감지 시각                 */
     enum SpdifFrameType     mIecPaFt;       /* Pa의 프리앰블 타입 (M/W)     */
     bool                    mIsNonAudio;    /* Non-audio 모드 여부          */
+
+    /* ---- B-sync 카운터 ---------------------------------------------- */
+    /* E-AC-3 버스트 = 6144 서브프레임 = 32 × 192(B-sync 간격)
+       진짜 Pa가 있는 B-sync는 32번 중 딱 1번
+       IEC61937 감지 성공 후 B-sync를 세어 32번째에서만 Pa 허용
+       → 나머지 31번 B-sync의 sft_B 오인식 완전 차단              */
+    uint32_t                mBSyncCount;    /* 마지막 IEC61937 감지 후 B-sync 횟수 */
+    bool                    mIecEverDetected; /* 한 번이라도 IEC61937 감지됐는지  */
 };
 
 extern "C" ANALYZER_EXPORT const char* __cdecl GetAnalyzerName();

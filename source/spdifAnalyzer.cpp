@@ -56,7 +56,9 @@ spdifAnalyzer::spdifAnalyzer()
     mIecDataType( 0 ),
     mIecBurstStart( 0 ),
     mIecPaFt( sft_invalid ),
-    mIsNonAudio( false )
+    mIsNonAudio( false ),
+    mBSyncCount( 0 ),
+    mIecEverDetected( false )
 {
     struct SpdifBitstreamCallbacks  cb;
 
@@ -97,11 +99,13 @@ void spdifAnalyzer::WorkerThread()
     mSamplesSinceLastBSync = 0;
 
     /* 상태머신 초기화 */
-    mIecState      = IEC61937_IDLE;
-    mIecDataType   = 0;
-    mIecBurstStart = 0;
-    mIecPaFt       = sft_invalid;
-    mIsNonAudio    = false;
+    mIecState         = IEC61937_IDLE;
+    mIecDataType      = 0;
+    mIecBurstStart    = 0;
+    mIecPaFt          = sft_invalid;
+    mIsNonAudio       = false;
+    mBSyncCount       = 0;
+    mIecEverDetected  = false;
 
     SpdifBitstreamAnalyzer_Reset(mSba);
 
@@ -190,9 +194,7 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
 
     mSamplesSinceLastBSync++;
 
-    /* B-sync 마커
-       B-sync가 오면 IEC61937 상태머신도 리셋
-       → 버스트 경계가 바뀌면 Pa~Pd 순서가 깨지기 때문 */
+    /* B-sync 마커 */
     if ( sft_B == ft ) {
         if ( 384 == mSamplesSinceLastBSync ) {
             mResults->AddMarker( t, AnalyzerResults::Dot, mSettings->mInputChannel );
@@ -200,8 +202,9 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
             mResults->AddMarker( t, AnalyzerResults::ErrorDot, mSettings->mInputChannel );
         }
         mSamplesSinceLastBSync = 0;
+        mBSyncCount++;   /* B-sync 카운터 증가 — Pa 허용 타이밍 판단용 */
 
-        /* B-sync 경계에서 상태머신 리셋 */
+        /* 상태머신이 중간에 있으면 리셋 (버스트 중간 B-sync는 무시) */
         if ( mIecState != IEC61937_IDLE ) {
             mIecState    = IEC61937_IDLE;
             mIecDataType = 0;
@@ -241,23 +244,28 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
 
     bool is_m_or_b   = ( ft == sft_M || ft == sft_B );
     bool is_w        = ( ft == sft_W );
-    /* Pa@0만 진짜 IEC61937 버스트 시작
-       Pa@65, Pa@328 등은 E-AC-3 데이터 내부 오인식
-       → B-sync 서브프레임(mSamplesSinceLastBSync==0)에서만 Pa 인정 */
-    bool in_burst_window = ( mSamplesSinceLastBSync == 0 );
+
+    /* Pa 허용 조건:
+       1. B-sync 서브프레임(mSamplesSinceLastBSync==0)
+       2. 처음 감지 전: 항상 허용 (버스트 위치 모름)
+          감지 이후: B-sync 카운터가 32의 배수일 때만 허용
+          (E-AC-3 버스트 = 32 B-sync 주기)
+       → 나머지 31번 B-sync의 sft_B 오인식 완전 차단 */
+    bool at_bsync    = ( mSamplesSinceLastBSync == 0 );
+    bool at_burst_boundary = !mIecEverDetected || ( mBSyncCount % 32 == 0 );
+    bool in_burst_window   = at_bsync && at_burst_boundary;
 
     switch ( mIecState )
     {
         case IEC61937_IDLE:
-            /* Pa@0만 진짜: B-sync 서브프레임과 동시에 오는 Pa만 허용 */
             if ( 0xF872 == word16 && is_m_or_b && in_burst_window ) {
                 mIecState      = IEC61937_GOT_PA;
                 mIecBurstStart = t;
                 mIecPaFt       = ft;
 
-                /* Pa 디버그 Frame: mData1 = B-sync 이후 서브프레임 번호 */
+                /* Pa 디버그 Frame: mData1=B-sync 카운터, mData2=ft */
                 Frame dbgFrame;
-                dbgFrame.mData1 = mSamplesSinceLastBSync;
+                dbgFrame.mData1 = mBSyncCount;
                 dbgFrame.mData2 = (uint64_t)ft;
                 dbgFrame.mFlags = 0;
                 dbgFrame.mType  = FRAME_TYPE_DBG_PA;
@@ -377,6 +385,11 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
 
             mResults->AddMarker( mIecBurstStart, AnalyzerResults::UpArrow,
                                  mSettings->mInputChannel );
+
+            /* 감지 성공 → B-sync 카운터 리셋 (다음 버스트는 32번째에서) */
+            mIecEverDetected = true;
+            mBSyncCount      = 0;
+            mIsNonAudio      = true;
 
             mIecState    = IEC61937_IDLE;
             mIecDataType = 0;

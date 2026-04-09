@@ -355,7 +355,7 @@ void spdifAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBas
             snprintf( buf, sizeof(buf), "[Pb_OK 0x%04X]\n", (unsigned)frame.mData1 );
         } else {
             snprintf( buf, sizeof(buf),
-                "[Pa@%llu]\n", (unsigned long long)frame.mData1 );
+                "[Pa BSyncCnt:%llu]\n", (unsigned long long)frame.mData1 );
         }
         AddTabularText( buf );
         return;
