@@ -430,6 +430,13 @@ void spdifAnalyzer::status_callback( uint64_t t, uint64_t tend,
     if ( mPrevStatus ) {
         mResults->CommitPacketAndStartNewPacket();
         mResults->CommitResults();
+    } else {
+        /* 첫 번째 CS callback: CS 192비트가 완전히 수집되기 전일 수 있음
+           → CS Frame 생성 없이 mIsNonAudio만 갱신하고 리턴 */
+        if ( status->channel_status_left[0] & 0x02 ) mIsNonAudio = true;
+        mPrevStatus    = t;
+        mPrevStatusEnd = tend;
+        return;
     }
 
     /* Channel Status 24바이트 저장 */

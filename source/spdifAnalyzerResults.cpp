@@ -67,7 +67,8 @@ static const char* cs_sample_rate( uint8_t cs3, bool is_nonpcm = false )
         case 0x08: return "88.2kHz";
         case 0x0A: return "96kHz";
         case 0x0C: return "176.4kHz";
-        case 0x0E: return "192kHz";
+        /* 0x0E: PCM이면 192kHz, Non-audio이면 192kHz(IEC61937)로 통일 */
+        case 0x0E: return is_nonpcm ? "192kHz(IEC61937)" : "192kHz";
         default:   return "?kHz";
     }
 }
