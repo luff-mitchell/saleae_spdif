@@ -38,7 +38,7 @@ extern "C" {
 
 /* ------------------------------------------------------------------ */
 /* 플러그인 버전                                                         */
-#define SPDIF_ANALYZER_VERSION  "v19"
+#define SPDIF_ANALYZER_VERSION  "v20"
 
 /* ------------------------------------------------------------------ */
 /* IEC 61937 버스트 구조 파싱용 상태머신                                 */
@@ -135,6 +135,7 @@ protected: //vars
        → 나머지 31번 B-sync의 sft_B 오인식 완전 차단              */
     uint32_t                mBSyncCount;    /* 마지막 IEC61937 감지 후 B-sync 횟수 */
     bool                    mIecEverDetected; /* 한 번이라도 IEC61937 감지됐는지  */
+    uint32_t                mStatusCallbackCount; /* status_callback 호출 횟수     */
 };
 
 extern "C" ANALYZER_EXPORT const char* __cdecl GetAnalyzerName();

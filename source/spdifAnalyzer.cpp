@@ -58,7 +58,8 @@ spdifAnalyzer::spdifAnalyzer()
     mIecPaFt( sft_invalid ),
     mIsNonAudio( false ),
     mBSyncCount( 0 ),
-    mIecEverDetected( false )
+    mIecEverDetected( false ),
+    mStatusCallbackCount( 0 )
 {
     struct SpdifBitstreamCallbacks  cb;
 
@@ -106,6 +107,7 @@ void spdifAnalyzer::WorkerThread()
     mIsNonAudio       = false;
     mBSyncCount       = 0;
     mIecEverDetected  = false;
+    mStatusCallbackCount = 0;
 
     SpdifBitstreamAnalyzer_Reset(mSba);
 
@@ -427,41 +429,50 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
 void spdifAnalyzer::status_callback( uint64_t t, uint64_t tend,
                                      struct SpdifChannelStatus *status )
 {
+    mStatusCallbackCount++;
+
     if ( mPrevStatus ) {
         mResults->CommitPacketAndStartNewPacket();
         mResults->CommitResults();
-    } else {
-        /* 첫 번째 CS callback: CS 192비트가 완전히 수집되기 전일 수 있음
-           → CS Frame 생성 없이 mIsNonAudio만 갱신하고 리턴 */
-        if ( status->channel_status_left[0] & 0x02 ) mIsNonAudio = true;
-        mPrevStatus    = t;
-        mPrevStatusEnd = tend;
-        return;
     }
 
-    /* Channel Status 24바이트 저장 */
-    memcpy( &mLastChannelStatus, status, sizeof(mLastChannelStatus) );
-    mHasChannelStatus = true;
-
-    /* Channel Status byte[0] bit[1] = Non-audio 플래그
-       IEC61937이 한 번이라도 감지됐으면 CS가 PCM으로 와도 Non-audio 유지
-       → 장치가 CS byte[0]를 잘못 설정하는 경우 보호
-       → T:err samp 억제도 함께 유지됨 */
+    /* Channel Status byte[0] bit[1] = Non-audio 플래그 갱신
+       IEC61937 감지 이후엔 PCM으로 와도 Non-audio 유지 */
     if ( status->channel_status_left[0] & 0x02 ) {
         mIsNonAudio = true;
     } else if ( !mIecEverDetected ) {
-        mIsNonAudio = false;   /* IEC61937 미감지 상태에서만 false 허용 */
+        mIsNonAudio = false;
     }
-    /* mIecEverDetected=true면 CS가 PCM으로 와도 mIsNonAudio=true 유지 */
 
-    /* ------------------------------------------------------------------
-       Channel Status Frame
-       mData1 [63:56] = byte[3] sample rate
-       mData1 [55:48] = byte[2] source/channel
-       mData1 [47:40] = byte[1] category code
-       mData1 [39:32] = byte[0] control bits
-       mData2 [7:0]   = byte[4] word length
-    ------------------------------------------------------------------ */
+    mPrevStatus    = t;
+    mPrevStatusEnd = tend;
+
+    /* CS Frame 표시 조건:
+       E-AC-3 페이로드 내부 서브프레임의 C비트는 의미없는 값이 수집됨
+       → IEC61937 감지 성공 이후 + 안정화 대기(2회 스킵) 후에만 표시
+       감지 전: 쓰레기값 CS 표시 안 함
+       감지 후 첫 2회: CS 비트스트림이 아직 E-AC-3 데이터 구간일 수 있음 */
+    if ( !mIecEverDetected ) {
+        memcpy( &mLastChannelStatus, status, sizeof(mLastChannelStatus) );
+        mHasChannelStatus = true;
+        return;   /* IEC61937 미감지 → CS Frame 생성 안 함 */
+    }
+
+    /* IEC61937 감지 후 몇 번째 CS callback인지 확인
+       mBSyncCount가 0으로 리셋된 이후 첫 32 B-sync 내 2회는 스킵 */
+    static uint32_t iec_detected_cb_count = 0;
+    if ( mBSyncCount < 64 ) {
+        /* 감지 성공 후 64 B-sync(2 버스트) 이내 → 안정화 대기 */
+        iec_detected_cb_count = 0;
+        memcpy( &mLastChannelStatus, status, sizeof(mLastChannelStatus) );
+        mHasChannelStatus = true;
+        return;
+    }
+
+    /* 안정화 완료 → CS Frame 생성 */
+    memcpy( &mLastChannelStatus, status, sizeof(mLastChannelStatus) );
+    mHasChannelStatus = true;
+
     Frame csFrame;
     csFrame.mData1 =
         ( (uint64_t)status->channel_status_left[0]        ) |
@@ -475,15 +486,12 @@ void spdifAnalyzer::status_callback( uint64_t t, uint64_t tend,
         ( (uint64_t)status->channel_status_right[1] <<  8 ) |
         ( (uint64_t)status->channel_status_right[2] << 16 ) |
         ( (uint64_t)status->channel_status_right[3] << 24 ) |
-        ( mIsNonAudio ? ((uint64_t)1 << 32) : 0 );  /* bit32: Non-audio 확정 플래그 */
+        ( mIsNonAudio ? ((uint64_t)1 << 32) : 0 );
 
     csFrame.mFlags = 0;
     csFrame.mType  = FRAME_TYPE_CHANNEL_STATUS;
     csFrame.mStartingSampleInclusive = t;
     csFrame.mEndingSampleInclusive   = tend;
     mResults->AddFrame( csFrame );
-
-    mPrevStatus    = t;
-    mPrevStatusEnd = tend;
-    mResults->CommitResults();   /* CS Frame을 UI에 반영 */
+    mResults->CommitResults();
 }
