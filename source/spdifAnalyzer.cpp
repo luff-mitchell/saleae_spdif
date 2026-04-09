@@ -196,6 +196,11 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
         eframe.mType  = sft_invalid;
         mResults->AddFrame( eframe );
         mResults->AddMarker( mPrevSampleEnd, AnalyzerResults::ErrorX, mSettings->mInputChannel );
+
+        /* 신호 끊김 감지 → CS 캐시 리셋
+           신호 재개 시 CS가 동일해도 다시 표시 */
+        mLastCsData1 = 0xFFFFFFFFFFFFFFFFULL;
+        mLastCsData2 = 0xFFFFFFFFFFFFFFFFULL;
     }
 
     Frame frame;
@@ -253,16 +258,14 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
     bool is_m_or_b   = ( ft == sft_M || ft == sft_B );
     bool is_w        = ( ft == sft_W );
 
-    /* Pa 허용 조건: B-sync 서브프레임에서만
-       E-AC-3: 32 B-sync 주기, AC-3: 8 B-sync 주기, DTS: 2~11 B-sync 주기
-       포맷마다 주기가 달라 mBSyncCount % N 조건이 맞지 않음
-       → B-sync에서만 탐색하되 오인식은 Pc data-type 유효성으로 차단 */
-    bool in_burst_window = ( mSamplesSinceLastBSync == 0 );
+    /* Pa 허용: B-sync 윈도우 조건 제거 (v2와 동일)
+       AC-3(8 B-sync), DTS(2~11 B-sync), E-AC-3(32 B-sync) 모두 커버
+       오인식 차단은 Pc data-type 유효성 체크로만 */
 
     switch ( mIecState )
     {
         case IEC61937_IDLE:
-            if ( 0xF872 == word16 && is_m_or_b && in_burst_window ) {
+            if ( 0xF872 == word16 && is_m_or_b ) {
                 mIecState      = IEC61937_GOT_PA;
                 mIecBurstStart = t;
                 mIecPaFt       = ft;
