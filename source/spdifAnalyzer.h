@@ -38,7 +38,7 @@ extern "C" {
 
 /* ------------------------------------------------------------------ */
 /* 플러그인 버전                                                         */
-#define SPDIF_ANALYZER_VERSION  "v26"
+#define SPDIF_ANALYZER_VERSION  "v27"
 
 /* ------------------------------------------------------------------ */
 /* IEC 61937 버스트 구조 파싱용 상태머신                                 */
@@ -135,6 +135,7 @@ protected: //vars
     uint64_t                mLastCsData1;   /* 직전 CS Frame mData1 (변화 감지용) */
     uint64_t                mLastCsData2;   /* 직전 CS Frame mData2 (변화 감지용) */
     bool                    mWasNonAudio;   /* 직전 CS가 Non-audio였는지 (PCM 전환 감지용) */
+    uint8_t                 mLastIecType;   /* 직전 IEC61937 data-type (변화 감지용) */
 };
 
 extern "C" ANALYZER_EXPORT const char* __cdecl GetAnalyzerName();

@@ -62,7 +62,8 @@ spdifAnalyzer::spdifAnalyzer()
     mStatusCallbackCount( 0 ),
     mLastCsData1( 0xFFFFFFFFFFFFFFFFULL ),
     mLastCsData2( 0xFFFFFFFFFFFFFFFFULL ),
-    mWasNonAudio( false )
+    mWasNonAudio( false ),
+    mLastIecType( 0xFF )
 {
     struct SpdifBitstreamCallbacks  cb;
 
@@ -114,6 +115,7 @@ void spdifAnalyzer::WorkerThread()
     mLastCsData1         = 0xFFFFFFFFFFFFFFFFULL;
     mLastCsData2         = 0xFFFFFFFFFFFFFFFFULL;
     mWasNonAudio         = false;
+    mLastIecType         = 0xFF;
 
     SpdifBitstreamAnalyzer_Reset(mSba);
 
@@ -197,10 +199,11 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
         mResults->AddFrame( eframe );
         mResults->AddMarker( mPrevSampleEnd, AnalyzerResults::ErrorX, mSettings->mInputChannel );
 
-        /* 신호 끊김 감지 → CS 캐시 리셋
-           신호 재개 시 CS가 동일해도 다시 표시 */
+        /* 신호 끊김 감지 → CS/IEC 캐시 리셋
+           신호 재개 시 동일 값이어도 다시 표시 */
         mLastCsData1 = 0xFFFFFFFFFFFFFFFFULL;
         mLastCsData2 = 0xFFFFFFFFFFFFFFFFULL;
+        mLastIecType = 0xFF;
     }
 
     Frame frame;
@@ -339,11 +342,15 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
             iecFrame.mType  = FRAME_TYPE_IEC61937;
             iecFrame.mStartingSampleInclusive = mIecBurstStart;
             iecFrame.mEndingSampleInclusive   = tend;
-            mResults->AddFrame( iecFrame );
-            mResults->CommitResults();
 
-            mResults->AddMarker( mIecBurstStart, AnalyzerResults::UpArrow,
-                                 mSettings->mInputChannel );
+            /* 직전과 동일한 포맷이면 표시 안 함 */
+            if ( mIecDataType != mLastIecType ) {
+                mLastIecType = mIecDataType;
+                mResults->AddFrame( iecFrame );
+                mResults->CommitResults();
+                mResults->AddMarker( mIecBurstStart, AnalyzerResults::UpArrow,
+                                     mSettings->mInputChannel );
+            }
 
             mIecEverDetected = true;
             mBSyncCount      = 0;
