@@ -426,8 +426,14 @@ void spdifAnalyzer::status_callback( uint64_t t, uint64_t tend,
     mPrevStatus    = t;
     mPrevStatusEnd = tend;
 
-    /* CS Frame 생성
-       validity 필터(spdif.c)로 쓰레기값은 이미 제거됨 */
+    /* CS byte[0] 유효성 체크
+       IEC 60958 Consumer/Professional CS byte[0]의 bit[7:4]는 항상 0
+       오염된 CS (E-AC-3 데이터 비트가 섞인 경우)는 이 비트가 0이 아님
+       → Pro/L/R mismatch/192kHz 오표시 방지 */
+    if ( status->channel_status_left[0] & 0xF0 ) {
+        mResults->CommitResults();
+        return;   /* 오염된 CS → 표시 안 함 */
+    }
 
     Frame csFrame;
     csFrame.mData1 =
