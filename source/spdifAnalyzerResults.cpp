@@ -304,27 +304,20 @@ void spdifAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBas
         /* Right channel byte[0] — 비교용 */
         uint8_t rcs0 = (uint8_t)((frame.mData2 >>  0) & 0xFF);
 
-        /* bit32: IEC61937 감지 이력 플래그 */
-        bool iec_detected = ( (frame.mData2 >> 32) & 0x1 ) != 0;
-
-        const char *audio_type = (cs0 & 0x02) ? "Non-audio" : "PCM";
-        const char *copy       = (cs0 & 0x04) ? "CopyOK"    : "NoCopy";
-        const char *emph       = (cs0 & 0x08) ? "Emphasis"  : "NoEmph";
-        const char *prof       = (cs0 & 0x01) ? "Pro"       : "Consumer";
+        /* bit32: Non-audio 확정 플래그 (mIsNonAudio 값) */
+        bool force_nonpcm = ( (frame.mData2 >> 32) & 0x1 ) != 0;
 
         /* is_nonpcm: CS bit[1]=1 이면 확실히 Non-audio.
-           IEC61937이 감지된 적 있으면 CS가 PCM이라 와도 Non-audio 처리
-           → 장치가 CS bit[1]을 0으로 잘못 설정하는 경우 보호 */
-        bool is_nonpcm = ( cs0 & 0x02 ) != 0 || iec_detected;
+           force_nonpcm=true이면 CS가 잘못 설정된 경우도 Non-audio 처리 */
+        bool is_nonpcm = ( cs0 & 0x02 ) != 0 || force_nonpcm;
 
-        /* IEC61937 감지 이력 있으면 audio_type/prof 보정 */
-        if ( iec_detected ) {
-            if ( !(cs0 & 0x02) ) audio_type = "Non-audio(CS오류)";
-            if (  (cs0 & 0x01) ) prof = "Consumer(CS오류)";
-        }
+        const char *audio_type = is_nonpcm ? "Non-audio" : "PCM";
+        const char *copy       = (cs0 & 0x04) ? "CopyOK"    : "NoCopy";
+        const char *emph       = (cs0 & 0x08) ? "Emphasis"  : "NoEmph";
+        /* Pro bit: force_nonpcm이면 Consumer로 보정 (E-AC-3은 Consumer 포맷) */
+        const char *prof       = ( (cs0 & 0x01) && !force_nonpcm ) ? "Pro" : "Consumer";
 
-        /* L/R mismatch: bit32(IEC 플래그) 제외하고 비교
-           Right CS 없거나(lower32==0) 수신 안 됨 → 억제 */
+        /* L/R mismatch: bit32 제외하고 비교, Right CS 없으면 억제 */
         uint32_t rcs_raw = (uint32_t)(frame.mData2 & 0xFFFFFFFF);
         bool right_cs_valid = ( rcs_raw != 0 );
         const char *lr_match = ( !right_cs_valid || cs0 == rcs0 ) ? "" : " [L/R mismatch!]";

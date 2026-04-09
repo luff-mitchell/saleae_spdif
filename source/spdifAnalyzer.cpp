@@ -468,7 +468,7 @@ void spdifAnalyzer::status_callback( uint64_t t, uint64_t tend,
         ( (uint64_t)status->channel_status_right[1] <<  8 ) |
         ( (uint64_t)status->channel_status_right[2] << 16 ) |
         ( (uint64_t)status->channel_status_right[3] << 24 ) |
-        ( mIecEverDetected ? ((uint64_t)1 << 32) : 0 );  /* bit32: IEC61937 감지 이력 */
+        ( mIsNonAudio ? ((uint64_t)1 << 32) : 0 );  /* bit32: Non-audio 확정 플래그 */
 
     csFrame.mFlags = 0;
     csFrame.mType  = FRAME_TYPE_CHANNEL_STATUS;
