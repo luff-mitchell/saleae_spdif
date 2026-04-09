@@ -253,15 +253,11 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
     bool is_m_or_b   = ( ft == sft_M || ft == sft_B );
     bool is_w        = ( ft == sft_W );
 
-    /* Pa 허용 조건:
-       1. B-sync 서브프레임(mSamplesSinceLastBSync==0)
-       2. 처음 감지 전: 항상 허용 (버스트 위치 모름)
-          감지 이후: B-sync 카운터가 32의 배수일 때만 허용
-          (E-AC-3 버스트 = 32 B-sync 주기)
-       → 나머지 31번 B-sync의 sft_B 오인식 완전 차단 */
-    bool at_bsync    = ( mSamplesSinceLastBSync == 0 );
-    bool at_burst_boundary = !mIecEverDetected || ( mBSyncCount % 32 == 0 );
-    bool in_burst_window   = at_bsync && at_burst_boundary;
+    /* Pa 허용 조건: B-sync 서브프레임에서만
+       E-AC-3: 32 B-sync 주기, AC-3: 8 B-sync 주기, DTS: 2~11 B-sync 주기
+       포맷마다 주기가 달라 mBSyncCount % N 조건이 맞지 않음
+       → B-sync에서만 탐색하되 오인식은 Pc data-type 유효성으로 차단 */
+    bool in_burst_window = ( mSamplesSinceLastBSync == 0 );
 
     switch ( mIecState )
     {
@@ -305,8 +301,20 @@ void spdifAnalyzer::sample_callback( uint64_t t, uint64_t tend,
 
         case IEC61937_GOT_PB:
             if ( is_m_or_b ) {
-                mIecDataType = (uint8_t)(word16 & 0x1F);
-                mIecState    = IEC61937_GOT_PC;
+                uint8_t dt = (uint8_t)(word16 & 0x1F);
+                /* data-type 유효성 체크: 알려진 포맷만 허용
+                   0x00 = null/미정의, 0x05/0x09~0x0A 등 미정의 타입 거부
+                   오인식된 Pa→Pb 이후 엉뚱한 Pc 차단 */
+                bool dt_valid = ( dt == 0x01 || dt == 0x02 || dt == 0x03 ||
+                                  dt == 0x04 || dt == 0x06 || dt == 0x07 ||
+                                  dt == 0x08 || dt == 0x0B || dt == 0x0C ||
+                                  dt == 0x15 || dt == 0x16 );
+                if ( dt_valid ) {
+                    mIecDataType = dt;
+                    mIecState    = IEC61937_GOT_PC;
+                } else {
+                    mIecState = IEC61937_IDLE;
+                }
             } else {
                 mIecState = IEC61937_IDLE;
             }
@@ -408,23 +416,8 @@ void spdifAnalyzer::status_callback( uint64_t t, uint64_t tend,
     mPrevStatus    = t;
     mPrevStatusEnd = tend;
 
-    /* CS 192비트가 의미 있는 값인지 확인:
-       validity=0 서브프레임만 수집했으므로
-       E-AC-3 전송 중에는 CS가 거의 0x00으로 남음
-       → channel_status_left[0]~[3]이 모두 0x00이면 표시 안 함
-       (PCM도 0x00이 정상값이지만, PCM에서는 byte[3]에 샘플레이트가 있음) */
-    bool cs_all_zero =
-        ( status->channel_status_left[0] == 0 ) &&
-        ( status->channel_status_left[1] == 0 ) &&
-        ( status->channel_status_left[2] == 0 ) &&
-        ( status->channel_status_left[3] == 0 ) &&
-        ( status->channel_status_left[4] == 0 );
-
-    if ( cs_all_zero && mIecEverDetected ) {
-        /* E-AC-3 전송 중 수집 안 된 CS → 표시 안 함 */
-        mResults->CommitResults();
-        return;
-    }
+    /* CS Frame 생성
+       validity 필터(spdif.c)로 쓰레기값은 이미 제거됨 */
 
     Frame csFrame;
     csFrame.mData1 =
